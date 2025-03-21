@@ -1866,6 +1866,8 @@ class SwordAPIJsonldMappingView(ModelView):
             # GET ItemType
             itemtypes = ItemTypes.get_latest_with_item_type()
             item_types = [{'id': itemtype.id, 'item_type_name': itemtype.name} for itemtype in itemtypes]
+            mapping_str = str(model.mapping)
+            modified_string = mapping_str.replace("'", '"')
 
             current_model_json = {
                 'id': model.id,
@@ -1890,7 +1892,7 @@ class SwordAPIJsonldMappingView(ModelView):
                 current_page_type='edit',
                 item_types=item_types,
                 current_name=model.name,
-                current_mapping=model.mapping,
+                current_mapping=modified_string,
                 current_item_type_id=model.item_type_id,
                 current_model_json=current_model_json,
                 exist_Waiting_approval_workflow=exist_Waiting_approval_workflow,
@@ -1902,7 +1904,7 @@ class SwordAPIJsonldMappingView(ModelView):
                 model.id = id
                 model.name = request.json.get('name')
                 model.mapping = request.json.get('mapping')
-                model.item_type_id = json.loads(request.json.get('item_type_id'))
+                model.item_type_id = request.json.get('item_type_id')
 
                 db.session.commit()
                 return jsonify(results=True),200
