@@ -1644,28 +1644,27 @@ class SwordAPIJsonldSettingsView(ModelView):
         else:
             # POST
             try:
-                model = SwordClientModel()
-                model.client_id = request.json.get('application')
+                client_id = request.json.get('application')
                 if request.json.get('registration_type') == 'Direct':
-                    model.registration_type_id = model.RegistrationType.DIRECT
-                    model.workflow_id = None
+                    registration_type_id = SwordClientModel().RegistrationType.DIRECT
+                    workflow_id = None
                 else:
-                    model.registration_type_id = model.RegistrationType.WORKFLOW
-                    model.workflow_id = request.json.get('workflow_id')
-                model.mapping_id = request.json.get('mapping_id')
+                    registration_type_id = SwordClientModel().RegistrationType.WORKFLOW
+                    workflow_id = request.json.get('workflow_id')
+                mapping_id = request.json.get('mapping_id')
                 if request.json.get('active') == 'True':
-                    model.active = True
+                    active = True
                 else:
-                    model.active = False
-                model.meta_data_api = request.json.get('Meta_data_API_selected')
+                    active = False
+                meta_data_api = request.json.get('Meta_data_API_selected')
 
                 sword_client = SwordClient.register(
-                    client_id=model.client_id,
-                    registration_type_id=model.registration_type_id,
-                    mapping_id=model.mapping_id,
-                    workflow_id=model.workflow_id,
-                    active=model.active,
-                    meta_data_api=model.meta_data_api
+                    client_id=client_id,
+                    registration_type_id=registration_type_id,
+                    mapping_id=mapping_id,
+                    workflow_id=workflow_id,
+                    active=active,
+                    meta_data_api=meta_data_api
                 )
                 return jsonify(results=True),200
 
