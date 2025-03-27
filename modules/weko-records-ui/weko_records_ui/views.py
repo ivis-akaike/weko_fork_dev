@@ -1186,8 +1186,6 @@ def replace_file():
     bucket_id = request.form.get('bucket_id')
     file = request.files['file']
 
-    print('File size calculated:', file_size)
-    print('Content-Length (header):', request.headers.get('Content-Length'))
     try:
         uri = replace_file_bucket(pid, bucket_id, file)
         return jsonify(uri)
