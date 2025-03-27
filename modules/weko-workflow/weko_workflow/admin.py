@@ -171,7 +171,7 @@ class FlowSettingView(BaseView):
         if '0' == flow_id:
             return jsonify(code=500, msg='No data to delete.',
                            data={'redirect': url_for('flowsetting.index')})
-        
+
         if not self._check_auth(flow_id) :
             abort(403)
 
@@ -236,8 +236,8 @@ class FlowSettingView(BaseView):
 
     @staticmethod
     def _check_auth(flow_id:str ):
-        """  
-        if the flow is used in open_restricted workflow , 
+        """
+        if the flow is used in open_restricted workflow ,
         the flow can Update by System Administrator.
 
         Args FlowDefine
@@ -361,7 +361,7 @@ class WorkFlowSettingView(BaseView):
         else:
             display = role
             hide = []
-        
+
         if workflows.open_restricted and not is_sysadmin:
             abort(403)
 
@@ -392,6 +392,7 @@ class WorkFlowSettingView(BaseView):
             flows_name=json_data.get('flows_name', None),
             itemtype_id=json_data.get('itemtype_id', 0),
             flow_id=json_data.get('flow_id', 0),
+            delete_flow_id=json_data.get('delete_flow_id', 0),
             index_tree_id=json_data.get('index_id'),
             location_id=json_data.get('location_id'),
             open_restricted=json_data.get('open_restricted', False),
@@ -469,7 +470,7 @@ class WorkFlowSettingView(BaseView):
         :param list_hide:
 
         :return: displays, hides.
-        """        
+        """
         displays = []
         hides = []
         if isinstance(role, list):
