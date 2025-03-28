@@ -21,15 +21,23 @@ from invenio_files_rest.errors import FileSizeError
 from invenio_files_rest.models import Bucket, ObjectVersion
 from invenio_indexer.api import RecordIndexer
 from invenio_pidstore import current_pidstore
+from invenio_pidstore.models import PersistentIdentifier
 
 from weko_deposit.api import WekoDeposit
 from weko_deposit.links import base_factory
 from weko_deposit.serializer import file_uploaded_owner
 from weko_items_autofill.utils import get_workflow_journal
-from weko_items_ui.utils import update_index_tree_for_record, validate_form_input_data
-from weko_items_ui.views import check_validation_error_msg
-from weko_records.api import ItemTypes
+from weko_items_ui.utils import (
+    update_index_tree_for_record, validate_form_input_data, to_files_js
+)
+from weko_items_ui.views import (
+    check_validation_error_msg, prepare_edit_item, prepare_delete_item
+)
+from weko_records.api import ItemTypes, ItemsMetadata
 from weko_records.serializers.utils import get_mapping
+from weko_records_ui.utils import soft_delete
+from weko_search_ui.utils import get_data_by_property
+
 
 from ..api import Action, WorkActivity, WorkFlow, ActivityStatusPolicy
 from ..errors import WekoWorkflowException
@@ -70,7 +78,11 @@ class HeadlessActivity(WorkActivity):
     >>> print(url, current_action, recid)
     http://weko3.example.org/workflow/activity/detail/A-EXAMPLE-0001 end_action 1
     """
-    def __init__(self, _lock_skip=True):
+   
+    def __init__(
+            self, _lock_skip=True, _metadata_replace=True, _files_replace=True
+        ):
+
         """Initialize.
 
         Args:
@@ -89,6 +101,9 @@ class HeadlessActivity(WorkActivity):
         self._model = None
         self._deposit = None
         self._lock_skip = _lock_skip
+        self._metadata_replace = _metadata_replace
+        self._files_replace= _files_replace
+
 
         actions = Action().get_action_list()
         self._actions = {
@@ -130,12 +145,13 @@ class HeadlessActivity(WorkActivity):
 
     def init_activity(
             self, user_id, workflow_id=None, community=None,
-            activity_id=None, item_id=None
+            activity_id=None, item_id=None, for_delete=False
         ):
         """Manual initialization of activity.
 
         Note:
             Please use `auto` method to automatically progress the action.
+
 
         user_id and workflow_id are required to create a new activity. <br>
         When activity_id is specified, it restarts the activity already exists. <br>
@@ -191,42 +207,100 @@ class HeadlessActivity(WorkActivity):
             return self.detail
 
         if workflow_id is None:
-            current_app.logger.error("workflow_id is required to create activity.")
-            raise WekoWorkflowException("workflow_id is required to create activity.")
-        self.workflow = self.workflow = workflow = WorkFlow().get_workflow_by_id(workflow_id)
-        if workflow is None:
-            current_app.logger.error(f"workflow(id={workflow_id}) is not found.")
-            raise WekoWorkflowException(f"workflow(id={workflow_id}) is not found.")
+            if item_id is not None:
+                self.recid = item_id
+                if not for_delete:
+                    response = prepare_edit_item(item_id)
+                else:
+                    response = prepare_delete_item(item_id)
 
-        self.item_type = ItemTypes.get_by_id(workflow.itemtype_id)
-        activity = {
-        "flow_id": workflow.flow_id,
-        "workflow_id": workflow.id,
-        "itemtype_id": workflow.itemtype_id,
-        }
+                if response.json.get("code") == 0:
+                    url = response.json.get("data").get("redirect")
 
-        if item_id is None:
-            # create activity for new item
-            activity.update({"activity_login_user": user_id})
-            result, _ = init_activity(activity, community)
+                    activity_id = url.split("/activity/detail/")[1]
+                    if "?" in activity_id:
+                        activity_id = activity_id.split("?")[0]
 
-            if result.json.get("code") == 0:
-                url = result.json.get("data").get("redirect")
+                    # # 削除フラグがあり、かつフローにapprovalがない場合は削除を実行
+                    # if for_delete and activity_id[1] == 4:
+                    #     res = soft_delete(item_id)
+                    #     if res.json.get("code") != 1:
+                    #         current_app.logger.error(
+                    #             f"failed to delete item({item_id}): {res.json.get('msg')}")
+                    #         raise WekoWorkflowException(res.json.get("msg"))
+                    self._model = super().get_activity_by_id(activity_id)
+                    self.workflow = self._model.workflow
+                    self.item_type = ItemTypes.get_by_id(self.workflow.itemtype_id) # 追加
 
-                activity_id = url.split("/activity/detail/")[1]
-                if "?" in activity_id:
-                    activity_id = activity_id.split("?")[0]
-                self._model = super().get_activity_by_id(activity_id)
+                else:
+                    current_app.logger.error(
+                        f"failed to create headless activity: {response.json.get('msg')}")
+                    raise WekoWorkflowException(response.json.get("msg"))
+
+                # activity = WorkActivity()
+                # pid = PersistentIdentifier.query.filter_by(
+                #         pid_type="recid", pid_value=item_id
+                #     ).first()
+                # item_uuid = pid.object_uuid
+                # workflow = activity.get_workflow_activity_by_item_id(item_uuid)
+                # if workflow is None:
+                #     current_app.logger.error(
+                #         f"workflow for item({item_id}) is not found.")
+                #     raise WekoWorkflowException(
+                #         f"workflow for item({item_id}) is not found.")
+                # workflow_id = workflow.workflow_id
             else:
-                current_app.logger.error(
-                    f"failed to create headless activity: {result.json.get('msg')}")
-                raise WekoWorkflowException(result.json.get("msg"))
-
+                current_app.logger.error("workflow_id or item_id is required to create activity.")
+                raise WekoWorkflowException("workflow_id or item_id is required to create activity.")
         else:
-            # create activity for existing item edit
-            """ TODO: weko_items_ui.views.prepare_edit_item"""
-            # self.recid =
-            pass
+            self.workflow = workflow = WorkFlow().get_workflow_by_id(workflow_id)
+            if workflow is None:
+                current_app.logger.error(f"workflow(id={workflow_id}) is not found.")
+                raise WekoWorkflowException(f"workflow(id={workflow_id}) is not found.")
+
+            self.item_type = ItemTypes.get_by_id(workflow.itemtype_id)
+            activity = {
+            "flow_id": workflow.flow_id if not for_delete else workflow.delete_flow_id,
+            "workflow_id": workflow.id,
+            "itemtype_id": workflow.itemtype_id,
+            }
+
+
+            if item_id is None:
+                # create activity for new item
+                activity.update({"activity_login_user": user_id})
+                result, _ = init_activity(activity, community)
+
+                if result.json.get("code") == 0:
+                    url = result.json.get("data").get("redirect")
+
+                    activity_id = url.split("/activity/detail/")[1]
+                    if "?" in activity_id:
+                        activity_id = activity_id.split("?")[0]
+                    self._model = super().get_activity_by_id(activity_id)
+                else:
+                    current_app.logger.error(
+                        f"failed to create headless activity: {result.json.get('msg')}")
+                    raise WekoWorkflowException(result.json.get("msg"))
+
+        # else:
+        #     # create activity for existing item edit
+        #     self.recid = item_id
+
+        #     response = prepare_edit_item(item_id)
+
+        #     if response.json.get("code") == 0:
+        #         url = result.json.get("data").get("redirect")
+
+        #         activity_id = url.split("/activity/detail/")[1]
+        #         if "?" in activity_id:
+        #             activity_id = activity_id.split("?")[0]
+        #         self._model = super().get_activity_by_id(activity_id)
+
+        #     else:
+        #         current_app.logger.error(
+        #             f"failed to create headless activity: {response.json.get('msg')}")
+        #         raise WekoWorkflowException(response.json.get("msg"))
 
         self.user = User.query.get(user_id)
         current_app.logger.info(
@@ -313,7 +387,8 @@ class HeadlessActivity(WorkActivity):
             raise WekoWorkflowException(error)
 
         self.recid = self._input_metadata(metadata, files)
-        self._designate_index(index)
+        if index is not None:
+            self._designate_index(index)
         self._comment(comment)
 
         return self.detail
@@ -329,14 +404,18 @@ class HeadlessActivity(WorkActivity):
 
             metadata.setdefault("pubdate", datetime.now().strftime("%Y-%m-%d"))
 
-            # TODO: how use
+            # grouplist = Group.get_group_list()
+            # authors_prefix_settings = get_data_authors_prefix_settings()
             journal = get_workflow_journal(self.activity_id)
 
             # update feedback mail list
             feedback_maillist = []
-            result, _ = get_feedback_maillist(self.activity_id)
-            if result.json.get("code") == 1:
-                feedback_maillist = result.json.get("data")
+            if self.recid is not None:
+                # TODO: get feedback mail list from `feedback_mail_list` table
+                pass
+            # result, _ = get_feedback_maillist(self.activity_id)
+            # if result.json.get("code") == 1:
+            #     feedback_maillist = result.json.get("data")
             feedback_maillist.extend(metadata.pop("feedback_mail_list", []))
             self.create_or_update_action_feedbackmail(
                 activity_id=self.activity_id,
@@ -363,6 +442,7 @@ class HeadlessActivity(WorkActivity):
                 current_app.logger.error(f"failed to input metadata: {result.get('error')}")
                 raise WekoWorkflowException(result.get("error"))
 
+            _old_metadata, _old_files = {}, []
             if self.recid is None:
                 record_data = {}
                 record_uuid = uuid.uuid4()
@@ -372,13 +452,23 @@ class HeadlessActivity(WorkActivity):
                 db.session.commit()
 
             else:
-                # TODO: check edit mode
-                # pid = PersistentIdentifier.query.filter_by(
-                #         pid_type="recid", pid_value=self.recid
-                #     ).first()
-                # TODO: case witch pid is already assigned (self.recid is not None)
-                # self._deposit = WekoDeposit...
-                pass
+                # check edit mode
+                pid = PersistentIdentifier.query.filter_by(
+                        pid_type="recid", pid_value=self.recid
+                    ).first()
+                record_uuid = pid.object_uuid
+
+                # self._deposit = WekoDeposit.get_record(record_uuid)
+                deposit = WekoDeposit.newversion(pid)
+                # get _old_metadata by record_uuid
+                _old_metadata = ItemsMetadata.get_record(record_uuid)
+                _old_files = to_files_js(self._deposit)
+                db.session.commit()
+
+            if self._metadata_replace:
+                # プロパティ単位で更新する場合metadataから_old_metadataにアップデートする
+                _old_metadata.update(metadata)
+                metadata = _old_metadata
 
             metadata.update({"$schema": f"/items/jsonschema/{self.item_type.id}"})
             workflow_index = self.workflow.index_tree_id
@@ -393,19 +483,25 @@ class HeadlessActivity(WorkActivity):
             # to exclude from file text extraction
             self._deposit.non_extract = non_extract
             self._deposit.commit()
-
             data = {
                 "metainfo": metadata,
-                "files": [],
+                "files": _old_files,
                 "endpoint": {
                     "initialization": f"/api/deposits/redirect/{pid}",
                 }
             }
 
-            if files is not None:
+            if self._files_replace:
                 data["files"] = self.files_info = self._upload_files(files)
-            # TODO: update propaties of files metadata, but it is difficult to
-            # decide whitch key should be updated.
+            else:
+                # TODO: update submited files and reuse other files
+                _new_files = self._upload_files(files)
+                for i, old_file in enumerate(_old_files):
+                    for new_file in _new_files:
+                        if old_file["key"] == new_file["key"]:
+                            old_file[i] = new_file
+                            break
+                data["files"] = _old_files
 
             data["endpoint"].update(base_factory(pid))
             self.upt_activity_metadata(self.activity_id, json.dumps(data))
@@ -485,7 +581,11 @@ class HeadlessActivity(WorkActivity):
                     file_info = upload(os.path.basename(file), f, size)
             else:
                 """werkzeug.datastructures.FileStorage"""
-                file_info = upload(file.filename, file.stream, file.content_length)
+
+                file.seek(0, 2) # ストリームの末尾に移動
+                file_size = file.tell() # 現在の位置はファイルサイズ
+                file.seek(0) # ストリームの位置を戻す
+                file_info = upload(file.filename, file.stream, file_size)
             files_info.append(file_info)
 
         return files_info

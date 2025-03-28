@@ -295,15 +295,27 @@ class Location(db.Model, Timestamp):
 
     s3_endpoint_url = db.Column(db.String(128), nullable=True)
 
-    s3_send_file_directly = db.Column(db.Boolean(name="s3_send_file_directly"), nullable=False, default=True)
-    
+    s3_send_file_directly = db.Column(db.Boolean(name='s3_send_file_directly'), nullable=False, default=True)
+
     size = db.Column(db.BigInteger, default=0, nullable=True)
 
     quota_size = db.Column(db.BigInteger, nullable=True)
 
     max_file_size = db.Column(db.BigInteger, nullable=True)
 
-    @validates("name")
+
+    s3_default_block_size = db.Column(db.BigInteger, nullable=True)
+
+    s3_maximum_number_of_parts = db.Column(db.BigInteger, nullable=True)
+
+    s3_region_name = db.Column(db.String(128), nullable=True)
+
+    s3_signature_version = db.Column(db.String(20), nullable=True)
+
+    s3_url_expiration = db.Column(db.BigInteger, nullable=True)
+
+    @validates('name')
+
     def validate_name(self, key, name):
         """Validate name."""
         if not slug_pattern.match(name) or len(name) > 20:
@@ -318,6 +330,12 @@ class Location(db.Model, Timestamp):
         return cls.query.filter_by(
             name=name,
         ).one_or_none()
+
+    def get_by_uri(cls, uri):
+        """Fetch a specific location object by uri."""
+        return cls.query.filter_by(
+            uri=uri,
+        ).one()
 
     @classmethod
     def get_default(cls):
@@ -779,6 +797,11 @@ class FileInstance(db.Model, Timestamp):
             .first()
 
     @classmethod
+    def get_location_all(cls):
+        """Get all location ."""
+        return db.session.query(Location)
+
+    @classmethod
     def create(cls):
         """Create a file instance.
 
@@ -997,6 +1020,19 @@ class FileInstance(db.Model, Timestamp):
                 if not os.path.isfile(pdf_dir + pdf_filename):
                     convert_dir = path+"/convert_"+str(self.id)
                     target_uri = self.uri
+                    tmp_uri = self.uri
+                    if tmp_uri.startswith('https://'):
+                        if tmp_uri.startswith('https://s3'):
+                            # ex: https://s3.amazonaws.com/bucket_name/file_name
+                            parts = tmp_uri.split('/')
+                            tmp_uri = 's3://' + '/'.join(parts[3:])
+                            self.uri = tmp_uri
+                        else:
+                            # ex: https://bucket_name.s3.us-east-1.amazonaws.com/file_name
+                            parts = tmp_uri.split('/')
+                            sub_parts = parts[2].split('.')
+                            tmp_uri = 's3://' + sub_parts[0] + '/' + '/'.join(parts[3:])
+                            self.uri = tmp_uri
                     if self.uri.startswith("s3://"):
                         target_uri = convert_dir+"/"+self.uri.split("/")[-1]
                         if os.path.exists(convert_dir):

@@ -81,3 +81,7 @@ information.
 S3_DEFAULT_BLOCK_SIZE = 5 * 2**20
 """Default block size value used to send multi-part uploads to S3.
 Typically 5Mb is minimum allowed by the API."""
+
+S3_LOCATION_TYPE_S3_PATH_VALUE = 's3'
+
+S3_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE = 's3_vh'

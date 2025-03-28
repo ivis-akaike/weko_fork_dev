@@ -21,9 +21,9 @@ from invenio_admin.filters import FilterConverter
 from invenio_admin.forms import LazyChoices
 from markupsafe import Markup
 from wtforms.fields import PasswordField
-from wtforms.fields import StringField
+from wtforms.fields import StringField, SelectField, IntegerField
 from wtforms.fields import BooleanField
-from wtforms.validators import ValidationError
+from wtforms.validators import ValidationError, NumberRange, Length, Optional
 from wtforms.widgets import PasswordInput
 
 from .models import (
@@ -69,14 +69,19 @@ class LocationModelView(ModelView):
     column_details_list = ("type", "name", "uri", "default", "size", "quota_size", "created", "updated", "buckets")
     column_list = ("type", "name", "uri", "default", "size", "quota_size", "created", "updated", "buckets")
     column_labels = dict(
-        id=_("ID"),
-        uri=_("URI"),
-        size=_("Size"),
-        quota_size=_("Quota Size"),
-        access_key=_("Access Key"),
-        secret_key=_("Secret Key"),
-        s3_endpoint_url=_("S3_ENDPOINT_URL"),
-        s3_send_file_directly=_("S3_SEND_FILE_DIRECTLY")
+        id=_('ID'),
+        uri=_('URI'),
+        size=_('Size'),
+        quota_size=_('Quota Size'),
+        access_key=_('Access Key'),
+        secret_key=_('Secret Key'),
+        s3_endpoint_url=_('S3_ENDPOINT_URL'),
+        s3_send_file_directly=_('S3_SEND_FILE_DIRECTLY'),
+        s3_default_block_size=_('S3_DEFAULT_BLOCK_SIZE'),
+        s3_maximum_number_of_parts=_('S3_MAXIMUM_NUMBER_OF_PARTS'),
+        s3_region_name=_('S3_REGION_NAME'),
+        s3_signature_version=_('S3_SIGNATURE_VERSION'),
+        s3_url_expiration=_('S3_URL_EXPIRATION'),
     )
     column_filters = (
         "default",
@@ -87,9 +92,11 @@ class LocationModelView(ModelView):
     column_default_sort = "name"
     form_base_class = FlaskForm
     form_columns = (
-        "name", "uri", "type", "access_key", "secret_key",
-        "s3_endpoint_url", "s3_send_file_directly",
-        "quota_size", "default")
+        'name', 'uri', 'type', 'access_key', 'secret_key',
+        's3_endpoint_url', 's3_send_file_directly',
+        's3_default_block_size', 's3_maximum_number_of_parts',
+        's3_region_name', 's3_signature_version', 's3_url_expiration',
+        'quota_size', 'default')
     form_choices = {
         "type": LazyChoices(
             lambda: current_app.config["FILES_REST_LOCATION_TYPE_LIST"])
@@ -99,8 +106,19 @@ class LocationModelView(ModelView):
                                     widget=PasswordInput(hide_value=False)),
         "secret_key": PasswordField("secret_key",
                                     widget=PasswordInput(hide_value=False)),
-        "s3_endpoint_url": StringField("endpoint_url"),
-        "s3_send_file_directly": BooleanField("send_file_directly")
+        's3_endpoint_url': StringField('endpoint_url'),
+        's3_send_file_directly': BooleanField('send_file_directly'),
+        's3_default_block_size': IntegerField('default_block_size', validators=[NumberRange(min=0), Optional()]),
+        's3_maximum_number_of_parts': IntegerField('maximum_number_of_parts', validators=[NumberRange(min=0), Optional()]),
+        's3_region_name': StringField('region_name', validators=[
+            Length(max=120, message='max 120 characters')
+        ]),
+        's3_signature_version': SelectField('signature_version',
+            choices=[
+            ('s3', 's3'),
+            ('s3v4', 's3v4'),
+            ]),
+        's3_url_expiration': IntegerField('url_expiration', validators=[NumberRange(min=0), Optional()]),
     }
     form_args = dict(name=dict(validators=[require_slug]))
     page_size = 25
@@ -109,6 +127,27 @@ class LocationModelView(ModelView):
 
     _system_role = os.environ.get("INVENIO_ROLE_SYSTEM",
                                   "System Administrator")
+
+    def on_model_change(self, form, model, is_created):
+        if is_created:
+            if model.type == current_app.config['FILES_REST_LOCATION_TYPE_S3_PATH_VALUE'] or \
+                model.type == current_app.config['FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE']:
+                model.s3_signature_version = None
+            else:
+                model.s3_default_block_size = None
+                model.s3_maximum_number_of_parts = None
+                model.s3_region_name = None
+                model.s3_signature_version = None
+                model.s3_url_expiration = None
+        else:
+            if model.type == current_app.config['FILES_REST_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE']:
+                model.s3_endpoint_url = ''
+            elif model.type != current_app.config['FILES_REST_LOCATION_TYPE_S3_PATH_VALUE']:
+                model.s3_default_block_size = None
+                model.s3_maximum_number_of_parts = None
+                model.s3_url_expiration = None
+                model.s3_region_name = None
+                model.s3_signature_version = None
 
     @property
     def can_create(self):

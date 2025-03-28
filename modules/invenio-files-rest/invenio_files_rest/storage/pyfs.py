@@ -36,10 +36,11 @@ class PyFSFileStorage(FileStorage):
 
     """
 
-    def __init__(self, fileurl, size=None, modified=None, clean_dir=True):
+    def __init__(self, fileurl, size=None, modified=None, clean_dir=True, location=None):
         """Storage initialization."""
         self.fileurl = fileurl
         self.clean_dir = clean_dir
+        self.location = location
         super(PyFSFileStorage, self).__init__(size=size, modified=modified)
 
     def _get_fs(self, create_dir=True):
@@ -248,10 +249,14 @@ def pyfs_storage_factory(
 
         if fileinstance.uri:
             # Use already existing URL.
+            print('インスタンスURI')
             fileurl = fileinstance.uri
         else:
             assert default_location
-            # Generate a new URL.
+            print('インスタンスURIじゃない')
+            print(default_location)
+            tmp_uri = default_location
+            print('ここ１')
             fileurl = make_path(
                 default_location,
                 str(fileinstance.id),
@@ -260,7 +265,13 @@ def pyfs_storage_factory(
                 current_app.config["FILES_REST_STORAGE_PATH_SPLIT_LENGTH"],
             )
 
-    return filestorage_class(fileurl, size=size, modified=modified, clean_dir=clean_dir)
+        locationList = fileinstance.get_location_all()
+        location = next((loc for loc in locationList if str(loc.uri) == str(default_location)), None)
+        if location is None:
+            location = next((loc for loc in locationList if str(loc.uri) in str(fileurl)), None)
+
+    return filestorage_class(
+        fileurl, size=size, modified=modified, clean_dir=clean_dir, location=location)
 
 
 def remove_dir_with_file(path):
