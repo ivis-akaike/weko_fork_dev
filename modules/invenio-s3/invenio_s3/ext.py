@@ -28,6 +28,7 @@ class InvenioS3(object):
 
     # @cached_property
     def init_s3fs_info(self, location):
+
         """Gather all the information needed to start the S3FSFileSystem."""
         if 'S3_ACCCESS_KEY_ID' in current_app.config:
             current_app.config['S3_ACCESS_KEY_ID'] = current_app.config[
@@ -63,6 +64,7 @@ class InvenioS3(object):
             },
         )
 
+
         if location.type == current_app.config.get('S3_LOCATION_TYPE_S3_PATH_VALUE') or \
             location.type == current_app.config.get('S3_LOCATION_TYPE_S3_VIRTUAL_HOST_VALUE'):
             info['key'] = location.access_key
@@ -72,7 +74,6 @@ class InvenioS3(object):
             if region_name:
                 info['client_kwargs']['region_name'] = region_name
             info['config_kwargs']['signature_version'] = location.s3_signature_version
-
 
         return info
 
