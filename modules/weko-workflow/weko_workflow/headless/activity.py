@@ -38,7 +38,6 @@ from weko_records.serializers.utils import get_mapping
 from weko_records_ui.utils import soft_delete
 from weko_search_ui.utils import get_data_by_property
 
-
 from ..api import Action, WorkActivity, WorkFlow, ActivityStatusPolicy
 from ..errors import WekoWorkflowException
 from ..utils import (
@@ -78,11 +77,9 @@ class HeadlessActivity(WorkActivity):
     >>> print(url, current_action, recid)
     http://weko3.example.org/workflow/activity/detail/A-EXAMPLE-0001 end_action 1
     """
-   
     def __init__(
             self, _lock_skip=True, _metadata_replace=True, _files_replace=True
         ):
-
         """Initialize.
 
         Args:
@@ -103,7 +100,6 @@ class HeadlessActivity(WorkActivity):
         self._lock_skip = _lock_skip
         self._metadata_replace = _metadata_replace
         self._files_replace= _files_replace
-
 
         actions = Action().get_action_list()
         self._actions = {
@@ -151,7 +147,6 @@ class HeadlessActivity(WorkActivity):
 
         Note:
             Please use `auto` method to automatically progress the action.
-
 
         user_id and workflow_id are required to create a new activity. <br>
         When activity_id is specified, it restarts the activity already exists. <br>
@@ -264,7 +259,6 @@ class HeadlessActivity(WorkActivity):
             "workflow_id": workflow.id,
             "itemtype_id": workflow.itemtype_id,
             }
-
 
             if item_id is None:
                 # create activity for new item
@@ -423,7 +417,6 @@ class HeadlessActivity(WorkActivity):
                 feedback_maillist=feedback_maillist
             )
 
-            from weko_search_ui.utils import get_data_by_property
             # get value of "Title" from metadata by jpcoar_mapping
             item_map = get_mapping(self.item_type.id, 'jpcoar_mapping', self.item_type)
             title_value_key = "title.@value"
@@ -432,9 +425,6 @@ class HeadlessActivity(WorkActivity):
                 "title": title[0] if len(title) > 0 else "",
                 "shared_user_id": metadata.pop("shared_user_id", -1)
             })
-
-            # to exclude from file text extraction
-            non_extract = getattr(metadata, "non_extract", [])
 
             result = {"is_valid": True}
             validate_form_input_data(result, self.item_type.id, deepcopy(metadata))
@@ -480,8 +470,6 @@ class HeadlessActivity(WorkActivity):
                 "actions": metadata.get("publish_status")
             }
             self._deposit.update(index, metadata)
-            # to exclude from file text extraction
-            self._deposit.non_extract = non_extract
             self._deposit.commit()
             data = {
                 "metainfo": metadata,

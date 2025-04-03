@@ -8,6 +8,8 @@
 
 """Test limiters."""
 
+from __future__ import absolute_import, print_function
+
 import pytest
 
 from invenio_files_rest.limiters import FileSizeLimit
@@ -15,8 +17,8 @@ from invenio_files_rest.limiters import FileSizeLimit
 
 def test_file_size_limit_comparisons():
     """Test FileSizeLimit comparison operators."""
-    bigger = FileSizeLimit(100, "big limit")
-    smaller = FileSizeLimit(50, "small limit")
+    bigger = FileSizeLimit(100, 'big limit')
+    smaller = FileSizeLimit(50, 'small limit')
 
     assert bigger > smaller
     assert smaller < bigger

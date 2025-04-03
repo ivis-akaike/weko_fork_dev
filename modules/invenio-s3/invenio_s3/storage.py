@@ -44,24 +44,6 @@ def set_blocksize(f):
     return inner
 
 
-def set_blocksize(f):
-    """Decorator to set the correct block size according to file size."""
-    @wraps(f)
-    def inner(self, *args, **kwargs):
-        size = kwargs.get('size', None)
-        block_size = (
-            ceil(size / current_app.config['S3_MAXIMUM_NUMBER_OF_PARTS'])
-            if size
-            else current_app.config['S3_DEFAULT_BLOCK_SIZE']
-        )
-
-        if block_size > self.block_size:
-            self.block_size = block_size
-        return f(self, *args, **kwargs)
-
-    return inner
-
-
 class S3FSFileStorage(PyFSFileStorage):
     """File system storage using Amazon S3 API for accessing files."""
 
@@ -93,7 +75,6 @@ class S3FSFileStorage(PyFSFileStorage):
                 self.location.s3_endpoint_url = parts[0] + '//' + parts[2]
 
         info = current_app.extensions['invenio-s3'].init_s3fs_info(location=self.location)
-
         fs = s3fs.S3FileSystem(default_block_size=self.block_size, **info)
 
         return (fs, url)
@@ -125,7 +106,7 @@ class S3FSFileStorage(PyFSFileStorage):
         self._size = size
 
         return self.fileurl, size, None
-    
+
     def remove(self, fs, path):
         """Delete a file with check FS."""
         if fs.exists(path):
@@ -223,13 +204,11 @@ class S3FSFileStorage(PyFSFileStorage):
             s3_url_builder = partial(
                 fs.url, path, expires=current_app.config['S3_URL_EXPIRATION']
             )
-
             if self.location:
                 if self.location.type != None:
                     s3_url_builder = partial(
                         fs.url, path, expires=self.location.s3_url_expiration
                     )
-
 
             return redirect_stream(
                 s3_url_builder,

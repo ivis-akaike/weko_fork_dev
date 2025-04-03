@@ -6,7 +6,8 @@
     under the terms of the MIT License; see LICENSE file for more details.
 
 
+
 Usage
-=====
+=======
 
 .. automodule:: invenio_files_rest

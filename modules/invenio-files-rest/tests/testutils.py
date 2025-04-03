@@ -8,14 +8,23 @@
 
 """Files download/upload REST API similar to S3 for Invenio."""
 
-from io import BytesIO
+from __future__ import absolute_import, print_function
+
+import sys
+
+from six import BytesIO
+
+if sys.version_info.major == 2:
+    PY2 = True
+else:
+    PY2 = False
 
 
 def login_user(client, user):
     """Log in a specified user."""
     with client.session_transaction() as sess:
-        sess["_user_id"] = user.id if user else None
-        sess["_fresh"] = True
+        sess['user_id'] = user.id if user else None
+        sess['_fresh'] = True
 
 
 class BadBytesIO(BytesIO):
@@ -24,11 +33,17 @@ class BadBytesIO(BytesIO):
     def __init__(self, *args, **kwargs):
         """Initialize."""
         self.called = False
-        return super(BadBytesIO, self).__init__(*args, **kwargs)
+        if PY2:
+            return BytesIO.__init__(self, *args, **kwargs)
+        else:
+            return super(BadBytesIO, self).__init__(*args, **kwargs)
 
     def read(self, *args, **kwargs):
         """Fail on second read."""
         if self.called:
             self.close()
         self.called = True
-        return super(BadBytesIO, self).read(*args, **kwargs)
+        if PY2:
+            return BytesIO.read(self, *args, **kwargs)
+        else:
+            return super(BadBytesIO, self).read(*args, **kwargs)

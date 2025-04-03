@@ -142,9 +142,6 @@ class SessionActivity(db.Model, Timestamp):
     device = db.Column(db.String(80), nullable=True)
     """User device."""
 
-    orgniazation_name = db.Column(db.String(255), nullable=True)
-    """User Organization."""
-
     @classmethod
     def query_by_expired(cls):
         """Query to select all expired sessions."""

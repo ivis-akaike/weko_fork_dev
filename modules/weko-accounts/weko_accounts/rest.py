@@ -32,7 +32,9 @@ from invenio_db import db
 from invenio_rest import ContentNegotiatedMethodView
 
 from .errors import VersionNotFoundRESTError, UserAllreadyLoggedInError, UserNotFoundError, InvalidPasswordError, DisabledUserError
-from .utils import limiter
+from .utils import create_limiter
+
+limiter = create_limiter()
 
 
 def create_blueprint(app, endpoints):
