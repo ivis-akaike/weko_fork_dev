@@ -77,7 +77,7 @@ from invenio_deposit.config import (
     DEPOSIT_REST_ENDPOINTS,
 )
 from invenio_files_rest import InvenioFilesREST
-from invenio_files_rest.models import Bucket, Location, ObjectVersion
+from invenio_files_rest.models import Bucket, FileInstance, Location, ObjectVersion
 from invenio_files_rest.permissions import (
     bucket_listmultiparts_all,
     bucket_read_all,
@@ -141,9 +141,9 @@ from weko_index_tree.config import WEKO_INDEX_TREE_REST_ENDPOINTS as _WEKO_INDEX
 from weko_index_tree.models import Index, IndexStyle
 from weko_items_ui.config import WEKO_ITEMS_UI_FILE_SISE_PREVIEW_LIMIT, WEKO_ITEMS_UI_MS_MIME_TYPE
 from weko_records import WekoRecords
-from weko_records.api import ItemsMetadata, ItemTypes, Mapping
+from weko_records.api import ItemsMetadata, ItemTypes, Mapping, ItemTypeNames
 from weko_records.config import WEKO_ITEMTYPE_EXCLUDED_KEYS
-from weko_records.models import ItemType, ItemTypeMapping, ItemTypeName
+from weko_records.models import ItemType, ItemTypeMapping, ItemTypeName, ItemMetadata
 from weko_records.serializers.utils import get_full_mapping
 from weko_records_ui.config import (
     EMAIL_DISPLAY_FLG,
@@ -159,7 +159,7 @@ from weko_theme.config import THEME_BODY_TEMPLATE, WEKO_THEME_ADMIN_ITEM_MANAGEM
 from weko_workflow import WekoWorkflow
 from weko_workflow.models import Action, ActionStatus, ActionStatusPolicy, Activity, FlowAction, FlowDefine, WorkFlow
 from weko_search_ui import WekoSearchREST, WekoSearchUI
-from weko_search_ui.config import SEARCH_UI_SEARCH_INDEX, WEKO_SEARCH_TYPE_DICT, WEKO_SEARCH_UI_BASE_TEMPLATE, WEKO_SEARCH_KEYWORDS_DICT
+from weko_search_ui.config import SEARCH_UI_SEARCH_INDEX, WEKO_SEARCH_TYPE_DICT, WEKO_SEARCH_UI_BASE_TEMPLATE, WEKO_SEARCH_KEYWORDS_DICT, CHILD_INDEX_THUMBNAIL_WIDTH, CHILD_INDEX_THUMBNAIL_HEIGHT, ROCRATE_METADATA_FILE, SWORD_METADATA_FILE
 from weko_search_ui.rest import create_blueprint
 from weko_search_ui.views import blueprint_api
 
@@ -322,6 +322,8 @@ def base_app(instance_path, search_class, request):
         FILES_REST_OBJECT_KEY_MAX_LEN=255,
         # SEARCH_UI_SEARCH_INDEX=SEARCH_UI_SEARCH_INDEX,
         SEARCH_UI_SEARCH_INDEX="test-weko",
+        CHILD_INDEX_THUMBNAIL_WIDTH = CHILD_INDEX_THUMBNAIL_WIDTH,
+        CHILD_INDEX_THUMBNAIL_HEIGHT = CHILD_INDEX_THUMBNAIL_HEIGHT,
         # SEARCH_ELASTIC_HOSTS=os.environ.get("INVENIO_ELASTICSEARCH_HOST"),
         SEARCH_INDEX_PREFIX="{}-".format("test"),
         SEARCH_CLIENT_CONFIG=dict(timeout=120, max_retries=10),
@@ -679,7 +681,12 @@ def base_app(instance_path, search_class, request):
         WEKO_INDEX_TREE_API="/api/tree/index/",
         WEKO_SEARCH_UI_TO_NUMBER_FORMAT="99999999999999.99",
         WEKO_SEARCH_UI_BASE_TEMPLATE=WEKO_SEARCH_UI_BASE_TEMPLATE,
-        WEKO_SEARCH_KEYWORDS_DICT=WEKO_SEARCH_KEYWORDS_DICT
+        WEKO_SEARCH_KEYWORDS_DICT=WEKO_SEARCH_KEYWORDS_DICT,
+        SWORD_METADATA_FILE = SWORD_METADATA_FILE,
+        ROCRATE_METADATA_FILE = ROCRATE_METADATA_FILE,
+        WEKO_ITEMS_UI_INDEX_PATH_SPLIT = '///',
+        WEKO_SEARCH_UI_BULK_EXPORT_RETRY = 5,
+        WEKO_SEARCH_UI_BULK_EXPORT_LIMIT = 100
     )
     app_.url_map.converters["pid"] = PIDConverter
     app_.config["RECORDS_REST_ENDPOINTS"]["recid"]["search_class"] = search_class
@@ -1225,6 +1232,20 @@ def db_records2(db, instance_path, users):
     yield result
 
 
+@pytest.fixture()
+def db_records3(db):
+    record_data = json_data("data/test_records2.json")
+    item_data = json_data("data/test_items2.json")
+    record_num = len(record_data)
+    result = []
+    with db.session.begin_nested():
+        for d in range(record_num):
+            result.append(create_record(record_data[d], item_data[d]))
+    db.session.commit()
+
+    yield result
+
+
 @pytest.fixture
 def redis_connect(app):
     redis_connection = RedisConnection().connection(
@@ -1642,6 +1663,7 @@ def communities(app, db, user, indices):
     comm0 = Community.create(
         community_id="comm1",
         role_id=r.id,
+        page=0, ranking=0, curation_policy='',fixed_points=0, thumbnail_path='',catalog_json=[], login_menu_enabled=False,
         id_user=user1.id,
         title="Title1",
         description="Description1",
@@ -1739,6 +1761,23 @@ def file_instance_mock(db):
 
     # db.session.add(file)
     # db.session.commit()
+
+@pytest.fixture
+def create_file_instance(db):
+    file_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data",
+        "sample_file",
+        "sample_file.txt",
+    )
+
+    file = FileInstance(
+        id="deadbeef-65bd-4d9b-93e2-ec88cc59aec5", uri=file_path, size=4, updated=None
+    )
+
+    db.session.add(file)
+    db.session.commit()
+    return file_path
 
 
 @pytest.yield_fixture()
@@ -1958,7 +1997,7 @@ def db_itemtype(app, db, make_itemtype):
         "render": "tests/data/itemtype_render.json",
         "mapping":"tests/data/itemtype_mapping.json"
     }
-    
+
     return make_itemtype(itemtype_id, itemtype_data)
 
 
@@ -2686,7 +2725,7 @@ def doi_records(app, db, identifier, indextree, location, db_itemtype, db_oaisch
         results.append(
             make_record(db, indexer, i, filepath, filename, mimetype, "xyz.ndl")
         )
-        
+
         i = 5
         filename = "helloworld.pdf"
         mimetype = "application/pdf"
@@ -3937,7 +3976,7 @@ def make_itemtype(app,db):
     def factory(id,datas):
         result = dict()
         item_type_name = ItemTypeName(
-            id=id, name=datas["name"],has_site_license=True,is_active=True
+            name=datas["name"],has_site_license=True,is_active=True
         )
         item_type_schema=dict()
         with open(datas["schema"],"r") as f:
@@ -3950,10 +3989,12 @@ def make_itemtype(app,db):
         with open(datas["render"], "r") as f:
             item_type_render = json.load(f)
 
+        with db.session.begin_nested():
+            db.session.add(item_type_name)
+
 
         item_type = ItemType(
-            id=id,
-            name_id=id,
+            name_id=item_type_name.id,
             harvesting_type=True,
             schema=item_type_schema,
             form=item_type_form,
@@ -3962,7 +4003,7 @@ def make_itemtype(app,db):
             version_id=1,
             is_deleted=False,
         )
-        
+
         if "mapping" in datas:
             item_type_mapping = dict()
             with open(datas["mapping"], "r") as f:
@@ -3971,16 +4012,30 @@ def make_itemtype(app,db):
             db.session.add(item_type_mapping)
             result["item_type_mapping"] = item_type_mapping
         with db.session.begin_nested():
-            db.session.add(item_type_name)
             db.session.add(item_type)
-            
+
         db.session.commit()
         result["item_type_name"] = item_type_name
         result["item_type"] = item_type
-        
+
         return result
     return factory
 
+@pytest.fixture()
+def create_export_all_data(db):
+    indexer = WekoIndexer()
+    indexer.get_es_index()
+    filepath = "tests/data/helloworld.pdf"
+    filename = "helloworld.pdf"
+    mimetype = "application/pdf"
+    uuid_list = db.session.query(PersistentIdentifier.object_uuid).distinct(PersistentIdentifier.object_uuid).all()
+    uuid_list = [uuid[0] for uuid in uuid_list]
+    item_meta_data_list = ItemMetadata.query.filter(ItemMetadata.id.in_(uuid_list)).all()
+    for meta in item_meta_data_list:
+        meta.item_type_id = 1
+        db.session.merge(meta)
+    for i in range(1000, 1110):
+        make_record(db, indexer, i, filepath, filename, mimetype, '')
 
 @pytest.fixture
 def test_indices(app, db):
@@ -4019,7 +4074,7 @@ def test_indices(app, db):
             online_issn=online_issn,
             harvest_spec=harvest_spec
         )
-    
+
     with db.session.begin_nested():
         db.session.add(base_index(1, 0, 0, datetime(2022, 1, 1), True, True, True, True, True, '1234-5678'))
         db.session.add(base_index(2, 0, 1))
@@ -4327,7 +4382,7 @@ def reset_class_value():
     )
     BaseMapper.itemtype_map = {}
     BaseMapper.identifiers = []
-    
+
     DCMapper.itemtype_map = {}
     DCMapper.identifiers = []
     DDIMapper.itemtype_map = {}
@@ -4346,7 +4401,7 @@ def create_record(db, record_data, item_data):
         db.session.add(rel)
         parent=None
         doi = None
-        
+
         if '.' in record_data["recid"]:
             parent = PersistentIdentifier.get("recid",int(float(record_data["recid"])))
             recid_p = PIDRelation.get_child_relations(parent).one_or_none()
@@ -4368,7 +4423,7 @@ def create_record(db, record_data, item_data):
         deposit = WekoDeposit(record, record.model)
 
         deposit.commit()
-        
+
     return recid, depid, record, item, parent, doi, deposit
 
 @pytest.fixture()
@@ -4376,11 +4431,11 @@ def db_records(app,db):
     record_datas = list()
     with open("tests/data/test_record/record_metadata.json") as f:
         record_datas = json.load(f)
-    
+
     item_datas = list()
     with open("tests/data/test_record/item_metadata.json") as f:
         item_datas = json.load(f)
-        
+
     for i in range(len(record_datas)):
         recid, depid, record, item, parent, doi, deposit = create_record(db,record_datas[i],item_datas[i])
 
@@ -4396,7 +4451,7 @@ def mapper_jpcoar(db_itemtype_jpcoar):
         item_type_mapping = Mapping.get_record(item_type.id)
         item_map = get_full_mapping(item_type_mapping, "jpcoar_mapping")
         res = {"$schema":item_type.id,"pubdate": date.today()}
-        
+
         if not isinstance(tags[type],list):
             metadata = [tags[type]]
         else:

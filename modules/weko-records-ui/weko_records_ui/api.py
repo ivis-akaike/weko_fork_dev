@@ -1,25 +1,28 @@
 from datetime import datetime
-import os
 import random
 import string
-import boto3
-import uuid
 import json
-import subprocess
-import requests
+import hashlib
 import traceback
+from datetime import datetime
+
+import boto3
 from email_validator import validate_email
 from flask import current_app, url_for
 from flask_login import current_user
 from flask_mail import Message
-import hashlib
+from flask_babelex import lazy_gettext as _
+
 from invenio_mail.admin import _load_mail_cfg_from_db, _set_flask_mail_cfg
 from flask_babelex import lazy_gettext as _
 from invenio_db import db
 
 from weko_records.api import RequestMailList, ItemsMetadata
 from weko_records_ui.captcha import get_captcha_info
-from weko_records_ui.errors import AuthenticationRequiredError, ContentsNotFoundError, InternalServerError, InvalidCaptchaError, InvalidEmailError, RequiredItemNotExistError
+from weko_records_ui.errors import (
+    AuthenticationRequiredError, ContentsNotFoundError, InternalServerError,
+    InvalidCaptchaError, InvalidEmailError, RequiredItemNotExistError
+)
 from weko_redis.redis import RedisConnection
 from weko_user_profiles.models import UserProfile
 from weko_deposit.api import WekoDeposit, WekoRecord

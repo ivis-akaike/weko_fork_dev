@@ -464,7 +464,9 @@ class IndexTreeActionResource(ContentNegotiatedMethodView):
             pid = kwargs.get('pid_value')
 
             if pid:
-                if comm_id:
+                if pid == "item_registration":
+                    tree = self.record_class.get_browsing_tree()
+                elif comm_id:
                     comm = Community.get(comm_id)
                     tree = self.record_class.get_contribute_tree(
                         pid, int(comm.root_node_id))
@@ -505,7 +507,7 @@ class IndexTreeActionResource(ContentNegotiatedMethodView):
                 if role_ids:
                     from invenio_communities.models import Community
                     comm_list = Community.query.filter(
-                        Community.id_role.in_(role_ids)
+                        Community.group_id.in_(role_ids)
                     ).all()
                     check_list = []
                     for comm in comm_list:

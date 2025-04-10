@@ -27,9 +27,10 @@ def set_blocksize(f):
         size = kwargs.get('size', None)
 
         block_size = (
-            ceil(size / current_app.config['S3_MAXIMUM_NUMBER_OF_PARTS'])
+            size // current_app.config['S3_MAXIMUM_NUMBER_OF_PARTS']  # Integer
             if size
-            else current_app.config['S3_DEFAULT_BLOCK_SIZE'])
+            else current_app.config['S3_DEFAULT_BLOCK_SIZE']
+        )
         if self.location:
             if self.location.type != None:
                 block_size = (
@@ -192,13 +193,16 @@ class S3FSFileStorage(PyFSFileStorage):
             s3_send_file_directly = default_location.s3_send_file_directly
 
         if s3_send_file_directly:
-            return super(S3FSFileStorage, self).send_file(filename,
-                                                          mimetype=mimetype,
-                                                          restricted=restricted,
-                                                          checksum=checksum,
-                                                          trusted=trusted,
-                                                          chunk_size=chunk_size,
-                                                          as_attachment=as_attachment)
+            return super(S3FSFileStorage, self).send_file(
+                filename,
+                mimetype=mimetype,
+                restricted=restricted,
+                checksum=checksum,
+                trusted=trusted,
+                chunk_size=chunk_size,
+                as_attachment=as_attachment
+            )
+
         try:
             fs, path = self._get_fs()
             s3_url_builder = partial(

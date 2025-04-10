@@ -26,6 +26,7 @@ import pytest
 from unittest import TestCase
 import json
 from elasticsearch.exceptions import RequestError
+from flask_login.utils import login_user
 from invenio_records.api import Record
 from invenio_records.errors import MissingModelError
 from invenio_pidstore.models import PersistentIdentifier
@@ -33,7 +34,7 @@ from weko_deposit.api import WekoDeposit
 from weko_index_tree.models import Index
 from mock import patch,MagicMock
 import uuid
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError,SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound
 
 from weko_records.api import FeedbackMailList, RequestMailList, FilesMetadata, ItemLink, \
@@ -43,6 +44,11 @@ from weko_records.models import ItemType, ItemTypeName, \
     SiteLicenseInfo, SiteLicenseIpAddress
 from jsonschema.validators import Draft4Validator
 from datetime import datetime
+from weko_records.models import ItemReference
+import pytest
+from unittest.mock import patch, MagicMock
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from weko_records.api import ItemLink, ItemReference
 
 # class RecordBase(dict):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_recordbase -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
@@ -1658,8 +1664,24 @@ def test_revision_FilesMetadata(app):
 # class SiteLicense(RecordBase):
 #     def get_records(cls):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_site_license_get_records -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
-def test_site_license_get_records(app, db, site_license_info):
+def test_site_license_get_records(app, db, site_license_info, users):
     records = SiteLicense.get_records()
+    assert len(records)==1
+    assert records[0]['organization_name']=='test'
+    assert records[0]['domain_name']=='domain'
+    assert records[0]['mail_address']=='nii@nii.co.jp'
+    assert records[0]['addresses']==[]
+
+    records = SiteLicense.get_records(users[0]['obj'])
+    assert len(records)==1
+    assert records[0]['organization_name']=='test'
+    assert records[0]['domain_name']=='domain'
+    assert records[0]['mail_address']=='nii@nii.co.jp'
+    assert records[0]['addresses']==[]
+
+    site_license_info.repository_id = "comm01"
+    db.session.commit()
+    records = SiteLicense.get_records(users[2]['obj'])
     assert len(records)==1
     assert records[0]['organization_name']=='test'
     assert records[0]['domain_name']=='domain'
@@ -1669,7 +1691,7 @@ def test_site_license_get_records(app, db, site_license_info):
 # class SiteLicense(RecordBase):
 #     def update(cls, obj):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_site_license_update -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
-def test_site_license_update(app, db, site_license_info):
+def test_site_license_update(app, db, site_license_info, users):
     _none_obj = {}
     _no_data_obj = {
         'item_type': {},
@@ -1692,7 +1714,8 @@ def test_site_license_update(app, db, site_license_info):
             }
         ]
     }
-
+    user = users[0]["obj"]
+    login_user(user)
     SiteLicense.update(_none_obj)
     db.session.commit()
     records = SiteLicense.get_records()
@@ -1706,6 +1729,17 @@ def test_site_license_update(app, db, site_license_info):
     SiteLicense.update(_test_obj)
     db.session.commit()
     records = SiteLicense.get_records()
+    assert len(records)==1
+    assert records[0]['organization_name']=='test1'
+    assert records[0]['domain_name']=='domain1'
+    assert records[0]['mail_address']=='nii@nii.co.jp'
+    assert records[0]['addresses']==[{'finish_ip_address': '255.255.255.255', 'start_ip_address': '0.0.0.0'}]
+
+    user = users[2]["obj"]
+    login_user(user)
+    SiteLicense.update(_test_obj)
+    db.session.commit()
+    records = SiteLicense.get_records(user)
     assert len(records)==1
     assert records[0]['organization_name']=='test1'
     assert records[0]['domain_name']=='domain1'
@@ -1767,6 +1801,7 @@ def test_depid_WekoRecord(app):
 #     def update_by_list_item_id(cls, item_ids, feedback_maillist):
 #     def get_mail_list_by_item_id(cls, item_id):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_feedback_mail_list_create_and_update -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
+@patch('invenio_communities.utils.get_repository_id_by_item_id', return_value='Root Index')
 def test_feedback_mail_list_create_and_update(app, db):
     _item_id0 = uuid.uuid4()
     _item_id1 = uuid.uuid4()
@@ -1800,6 +1835,7 @@ def test_feedback_mail_list_create_and_update(app, db):
 # class FeedbackMailList(object):
 #     def get_feedback_mail_list(cls):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_get_feedback_mail_list -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
+@patch('invenio_communities.utils.get_repository_id_by_item_id', return_value='Root Index')
 def test_get_feedback_mail_list(app, db):
     def _create_pid(id, uuid):
         pid = PersistentIdentifier()
@@ -1832,6 +1868,9 @@ def test_get_feedback_mail_list(app, db):
         data = FeedbackMailList.get_feedback_mail_list()
         assert data=={'nii0@nii.co.jp': {'items': [str(_item_id0), str(_item_id2)], 'author_id': ''},
                       'nii1@nii.co.jp': {'items': [str(_item_id1), str(_item_id2)], 'author_id': '1'}}
+        data = FeedbackMailList.get_feedback_mail_list(repo_id='Root Index')
+        assert data=={'nii0@nii.co.jp': {'items': [str(_item_id0), str(_item_id2)], 'author_id': ''},
+                      'nii1@nii.co.jp': {'items': [str(_item_id1), str(_item_id2)], 'author_id': '1'}}
 
 
 # class FeedbackMailList(object):
@@ -1839,12 +1878,13 @@ def test_get_feedback_mail_list(app, db):
 #     def delete_without_commit(cls, item_id):
 #     def delete_by_list_item_id(cls, item_ids):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_feedback_mail_list_delete -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
+@patch('invenio_communities.utils.get_repository_id_by_item_id', return_value='Root Index')
 def test_feedback_mail_list_delete(app, db):
     _item_id1 = uuid.uuid4()
     _item_id2 = uuid.uuid4()
     _item_id3 = uuid.uuid4()
     _item_id4 = uuid.uuid4()
-    _feedback_maillist = ['nii@nii.co.jp']
+    _feedback_maillist = [{'email': 'nii0@nii.co.jp'}]
     FeedbackMailList.update_by_list_item_id([_item_id1, _item_id2, _item_id3, _item_id4], _feedback_maillist)
 
     flag = FeedbackMailList.delete(1)
@@ -1945,45 +1985,173 @@ def test_request_mail_list_delete(app, db):
 #     def update(self, items):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_item_link_update -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
 def test_item_link_update(app, db, records):
-    _uuid = str(records[0][0].object_uuid)
-    _items1 = [
-        {
-            'item_id': '1',
-            'sele_id': 'URI'
-        },
-        {
-            'item_id': '2',
-            'sele_id': 'URI'
-        }
+    """
+    ItemLinkのupdateメソッドをテストする関数。
+    各テストケースで期待データと実際のデータを比較する。
+    """
+    # テスト用のレコードを作成
+    org_item_id = "999"
+    dst_item_id_1 = "1"
+    dst_item_id_2 = "2"
+    dst_item_id_3 = "3"
+
+    # テスト対象のインスタンスを作成
+    instance = ItemLink(recid=org_item_id)
+
+    #テストケース 1: 新しいリレーションシップの作成
+    items = [
+        {'item_id': dst_item_id_1, 'sele_id': 'normal'},
+        {'item_id': dst_item_id_2, 'sele_id': 'isSupplementTo'}
     ]
-    _items2 = [
-        {
-            'item_id': '2',
-            'sele_id': 'DOI'
-        },
-        {
-            'item_id': '3',
-            'sele_id': 'HDL'
-        }
+    result = instance.update(items)
+    assert result is None  # エラーが発生しないことを確認
+
+    # 期待データ: 新しいリレーションシップが作成されているか確認
+    expected_relations = [
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_1, 'reference_type': 'normal'},
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_2, 'reference_type': 'isSupplementTo'},
+        {'src_item_pid': dst_item_id_2, 'dst_item_pid': org_item_id, 'reference_type': 'isSupplementedBy'}  # 逆リレーション
     ]
-    ItemLink.update(ItemLink(_uuid), _items1)
-    r = ItemLink.get_item_link_info(_uuid)
-    assert len(r)==2
-    assert r[0]['item_links']=='1'
-    assert r[0]['item_title']==records[0][1]['item_title']
-    assert r[0]['value']=='URI'
-    assert r[1]['item_links']=='2'
-    assert r[1]['item_title']==records[1][1]['item_title']
-    assert r[1]['value']=='URI'
-    ItemLink.update(ItemLink(_uuid), _items2)
-    r = ItemLink.get_item_link_info(_uuid)
-    assert len(r)==2
-    assert r[0]['item_links']=='2'
-    assert r[0]['item_title']==records[1][1]['item_title']
-    assert r[0]['value']=='DOI'
-    assert r[1]['item_links']=='3'
-    assert r[1]['item_title']==records[2][1]['item_title']
-    assert r[1]['value']=='HDL'
+    actual_relations = ItemReference.query.all()
+    assert len(actual_relations) == len(expected_relations)  # リレーションシップの数が一致するか確認
+    for rel in actual_relations:
+        assert {'src_item_pid': rel.src_item_pid, 'dst_item_pid': rel.dst_item_pid, 'reference_type': rel.reference_type} in expected_relations
+
+    # # テストケース 2: 既存のリレーションシップの更新
+    items = []
+    result = instance.update(items)
+    assert result is None
+    items = [
+        {'item_id': org_item_id, 'dst_item_id': dst_item_id_1, 'sele_id': 'isSupplementTo'},
+        {'item_id': org_item_id, 'dst_item_id': dst_item_id_2, 'sele_id': 'isSupplementedBy'}
+    ]
+    instance.bulk_create(items)
+    items = [
+            {'item_id': dst_item_id_2, 'sele_id': 'isSupplementedBy'},
+            {'item_id': dst_item_id_1, 'sele_id': 'isSupplementedBy'}
+        ]
+    result = instance.update(items)
+    # 期待データ: 新しいリレーションシップが作成されているか確認
+    expected_relations = [
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_2, 'reference_type': 'isSupplementedBy'},
+        {'src_item_pid': dst_item_id_2, 'dst_item_pid': org_item_id, 'reference_type': 'isSupplementTo'},  # 逆リレーション
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_1, 'reference_type': 'isSupplementedBy'},
+        {'src_item_pid': dst_item_id_1, 'dst_item_pid': org_item_id, 'reference_type': 'isSupplementTo'}  # 逆リレーション
+    ]
+
+    actual_relations = ItemReference.query.all()
+    assert len(actual_relations) == len(expected_relations)  # リレーションシップの数が一致するか確認
+    for rel in actual_relations:
+        assert {'src_item_pid': rel.src_item_pid, 'dst_item_pid': rel.dst_item_pid, 'reference_type': rel.reference_type} in expected_relations
+
+    # テストケース 3: リレーションシップの削除
+    items = []
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: すべてのリレーションシップが削除されているか確認
+    assert ItemReference.query.count() == 0
+
+    # テストケース 4: 補足リレーションシップの作成と削除
+    items = [
+        {'item_id': dst_item_id_1, 'sele_id': 'isSupplementTo'}
+    ]
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: 補足リレーションシップが作成されているか確認
+    supplement_relation = ItemReference.query.filter_by(src_item_pid=org_item_id, dst_item_pid=dst_item_id_1).first()
+    assert supplement_relation.reference_type == 'isSupplementTo'
+    inverse_relation = ItemReference.query.filter_by(src_item_pid=dst_item_id_1, dst_item_pid=org_item_id).first()
+    assert inverse_relation.reference_type == 'isSupplementedBy'
+
+    # テストケース 5: 無効なアイテムIDの処理
+    items = [
+        {'item_id': 'invalid', 'sele_id': 'normal'}
+    ]
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: 無効なアイテムIDは無視され、リレーションシップが作成されていないか確認
+    assert ItemReference.query.filter_by(dst_item_pid='invalid').first() is None
+
+    # テストケース 6: データベースエラーの処理
+    # エラーを発生させるための不正なデータを入力
+
+    # bulk_create メソッドをモックし、IntegrityError を発生させる
+    with patch.object(instance, 'bulk_create', side_effect=IntegrityError("duplicate key value", None, None)):
+        items = [
+            {'item_id': dst_item_id_1, 'sele_id': 'normal'}
+        ]
+        result = instance.update(items)
+
+        # IntegrityError が発生し、エラーメッセージが返されることを確認
+        assert result is not None
+        assert "duplicate key value" in result
+
+    # bulk_create メソッドをモックし、SQLAlchemyError を発生させる
+    with patch.object(instance, 'bulk_create', side_effect=SQLAlchemyError("transaction error")):
+        items = [
+            {'item_id': dst_item_id_1, 'sele_id': 'normal'}
+        ]
+        result = instance.update(items)
+
+        # SQLAlchemyError が発生し、エラーメッセージが返されることを確認
+        assert result is not None
+        assert "transaction error" in result
+
+    # テストケース 7: 複数のリレーションシップの一括処理
+    items = [
+        {'item_id': dst_item_id_1, 'sele_id': 'normal'},
+        {'item_id': dst_item_id_2, 'sele_id': 'isSupplementTo'},
+        {'item_id': dst_item_id_3, 'sele_id': 'isSupplementedBy'}
+    ]
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: すべてのリレーションシップが正しく作成されているか確認
+    expected_relations = [
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_1, 'reference_type': 'normal'},
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_2, 'reference_type': 'isSupplementTo'},
+        {'src_item_pid': dst_item_id_2, 'dst_item_pid': org_item_id, 'reference_type': 'isSupplementedBy'},
+        {'src_item_pid': org_item_id, 'dst_item_pid': dst_item_id_3, 'reference_type': 'isSupplementedBy'},
+        {'src_item_pid': dst_item_id_3, 'dst_item_pid': org_item_id, 'reference_type': 'isSupplementTo'}
+    ]
+    actual_relations = ItemReference.query.all()
+    assert len(actual_relations) == len(expected_relations)  # リレーションシップの数が一致するか確認
+    for rel in actual_relations:
+        assert {'src_item_pid': rel.src_item_pid, 'dst_item_pid': rel.dst_item_pid, 'reference_type': rel.reference_type} in expected_relations
+
+    # テストケース 8: 補足リレーションシップの逆リレーションシップの作成
+    items = [
+        {'item_id': dst_item_id_1, 'sele_id': 'isSupplementTo'}
+    ]
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: 逆リレーションシップが正しく作成されているか確認
+    inverse_relation = ItemReference.query.filter_by(src_item_pid=dst_item_id_1, dst_item_pid=org_item_id).first()
+    assert inverse_relation.reference_type == 'isSupplementedBy'
+
+    # テストケース 9: `isSupplementedBy`から`isSupplementTo`への更新
+    items = [
+        {'item_id': dst_item_id_1, 'sele_id': 'isSupplementTo'}
+    ]
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: リレーションシップが正しく更新されているか確認
+    updated_relation = ItemReference.query.filter_by(src_item_pid=org_item_id, dst_item_pid=dst_item_id_1).first()
+    assert updated_relation.reference_type == 'isSupplementTo'
+
+    # テストケース 10: 補足リレーションシップの削除
+    items = []
+    result = instance.update(items)
+    assert result is None
+
+    # 期待データ: すべてのリレーションシップが削除されているか確認
+    assert ItemReference.query.count() == 0
+
 
 # class ItemLink(object):
 #     def get_item_link_info(cls, recid):
@@ -1994,7 +2162,8 @@ def test_item_link_bulk_create(app, db, records):
     _uuid = str(records[0][0].object_uuid)
     _items = [
         {
-            'item_id': '1',
+            'dst_item_id': '1',
+            'item_id': _uuid,
             'sele_id': 'URI'
         }
     ]
@@ -2010,6 +2179,73 @@ def test_item_link_bulk_create(app, db, records):
     #assert len(r)==1
     #assert r[0]['reference_type']=='URI'
 
+# .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_bulk_create_supplement -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
+def test_bulk_create_supplement(app, db):
+    """
+    bulk_create_supplement メソッドの動作をテストする。
+    各ケースで期待される動作を確認する。
+    """
+    # テストケース 1: dst_items に1つのアイテムリンク情報が含まれている場合
+    dst_items_single = [
+        {'src_item_id': '1', 'dst_item_id': '2', 'sele_id': 'isSupplementTo'}
+    ]
+    instance = ItemLink(recid='999')
+    instance.bulk_create_supplement(dst_items_single)
+
+    # データベースに保存されたアイテムを確認
+    saved_items = ItemReference.query.all()
+    assert len(saved_items) == 1
+    assert saved_items[0].src_item_pid == '1'
+    assert saved_items[0].dst_item_pid == '2'
+    assert saved_items[0].reference_type == 'isSupplementTo'
+
+    # テストケース 2: dst_items に複数のアイテムリンク情報（src_item_id キーが重複しない）が含まれている場合
+    dst_items_multiple = [
+        {'src_item_id': '3', 'dst_item_id': '4', 'sele_id': 'isSupplementedBy'},
+        {'src_item_id': '5', 'dst_item_id': '6', 'sele_id': 'isSupplementTo'}
+    ]
+    instance.bulk_create_supplement(dst_items_multiple)
+
+    # データベースに保存されたアイテムを確認
+    saved_items = ItemReference.query.all()
+    assert len(saved_items) == 3  # 前のテストケースで1つ追加されているため、合計3つ
+    assert saved_items[1].src_item_pid == '3'
+    assert saved_items[2].src_item_pid == '5'
+
+    # テストケース 3: dst_items のいずれかの辞書に src_item_id, dst_item_id, sele_id のいずれかのキーが欠けている場合
+    dst_items_missing_key = [
+        {'src_item_id': '7', 'dst_item_id': '8', 'sele_id': 'isSupplementTo'},
+        {'src_item_id': '9', 'dst_item_id': '10'},  # sele_id が欠けている
+        {'src_item_id': '11', 'dst_item_id': '12', 'sele_id': 'isSupplementTo'}
+    ]
+    with pytest.raises(Exception):
+        instance.bulk_create_supplement(dst_items_missing_key)
+
+    # データベースに変更がないことを確認
+    saved_items = ItemReference.query.all()
+    assert len(saved_items) == 3  # 前のテストケースで追加された3つのみ
+
+    # テストケース 4: dst_items に複数のアイテムリンク情報（src_item_id キーが重複）が含まれている場合
+    # データベースに変更がないことを確認
+    saved_items = ItemReference.query.all()
+    updateBefore = len(saved_items)
+    dst_items = [
+        {'src_item_id': '1', 'dst_item_id': '2', 'sele_id': 'isSupplementTo'},
+        {'src_item_id': '1', 'dst_item_id': '3', 'sele_id': 'isSupplementedBy'},  # src_item_id が重複
+        {'src_item_id': '4', 'dst_item_id': '5', 'sele_id': 'isSupplementTo'}
+    ]
+
+    instance = ItemLink(recid='999')
+
+    # bulk_create_supplement メソッドをモックし、IntegrityError を発生させる
+    with patch.object(instance, 'bulk_create_supplement', side_effect=IntegrityError("duplicate key value", None, None)):
+        with pytest.raises(IntegrityError):
+            instance.bulk_create_supplement(dst_items)
+
+    # データベースに変更がないことを確認
+    saved_items = ItemReference.query.all()
+    assert len(saved_items) == updateBefore
+
 # class ItemLink(object):
 #     def bulk_update(self, dst_items):
 # .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_item_link_bulk_update -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
@@ -2023,11 +2259,13 @@ def test_item_link_bulk_update(app, db, records):
     ]
     _items2 = [
         {
-            'item_id': '1',
+            'item_id': _uuid,
+            'dst_item_id': '1',
             'sele_id': 'URI'
         },
         {
-            'item_id': '2',
+            'item_id': _uuid,
+            'dst_item_id': '2',
             'sele_id': 'DOI'
         }
     ]
@@ -2050,15 +2288,18 @@ def test_item_link_bulk_delete(app, db, records):
     _uuid = str(records[0][0].object_uuid)
     _items = [
         {
-            'item_id': '1',
+            'item_id': _uuid,
+            'dst_item_id': '1',
             'sele_id': 'URI'
         },
         {
-            'item_id': '2',
+            'item_id': _uuid,
+            'dst_item_id': '2',
             'sele_id': 'DOI'
         },
         {
-            'item_id': '3',
+            'item_id': _uuid,
+            'dst_item_id': '3',
             'sele_id': 'HDL'
         }
     ]
@@ -2070,3 +2311,209 @@ def test_item_link_bulk_delete(app, db, records):
     assert r[0]['item_links']=='3'
     assert r[0]['item_title']==records[2][1]['item_title']
     assert r[0]['value']=='HDL'
+
+
+# class ItemLink(object):
+#     def bulk_delete_supplement(self, dst_item_ids):
+# .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_bulk_delete_supplement -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
+def test_bulk_delete_supplement(app, db, records):
+    """
+    bulk_delete_supplement メソッドの動作をテストする。
+    各ケースで期待される動作を確認する。
+    """
+    org_item_id = "999"
+
+    # テストケース 1: dst_item_ids に1つのアイテムIDが含まれている場合
+    dst_item_id_single = "1"
+
+    # ItemReference テーブルにテストデータを追加
+    db.session.add(ItemReference(
+        src_item_pid=dst_item_id_single,
+        dst_item_pid=org_item_id,
+        reference_type="isSupplementTo"
+    ))
+    db.session.add(ItemReference(
+        src_item_pid=org_item_id,
+        dst_item_pid=dst_item_id_single,
+        reference_type="isSupplementedBy"
+    ))
+    db.session.commit()
+
+    # bulk_delete_supplement を実行
+    instance = ItemLink(recid=org_item_id)
+    instance.bulk_delete_supplement([dst_item_id_single])
+
+    # データベースの状態を確認
+    deleted_items = db.session.query(ItemReference).filter(
+        ItemReference.src_item_pid == dst_item_id_single,
+        ItemReference.dst_item_pid == org_item_id,
+        ItemReference.reference_type.in_(["isSupplementTo", "isSupplementedBy"])
+    ).all()
+
+    assert len(deleted_items) == 0  # 該当するレコードが削除されていることを確認
+
+    # テストケース 2: dst_item_ids に複数のアイテムIDが含まれている場合
+    dst_item_ids_multiple = ["2", "3", "4"]
+
+    # ItemReference テーブルにテストデータを追加
+    for dst_item_id in dst_item_ids_multiple:
+        db.session.add(ItemReference(
+            src_item_pid=dst_item_id,
+            dst_item_pid=org_item_id,
+            reference_type="isSupplementTo"
+        ))
+        db.session.add(ItemReference(
+            src_item_pid=org_item_id,
+            dst_item_pid=dst_item_id,
+            reference_type="isSupplementedBy"
+        ))
+    db.session.commit()
+
+    # bulk_delete_supplement を実行
+    instance.bulk_delete_supplement(dst_item_ids_multiple)
+
+    # データベースの状態を確認
+    for dst_item_id in dst_item_ids_multiple:
+        deleted_items = db.session.query(ItemReference).filter(
+            ItemReference.src_item_pid == dst_item_id,
+            ItemReference.dst_item_pid == org_item_id,
+            ItemReference.reference_type.in_(["isSupplementTo", "isSupplementedBy"])
+        ).all()
+
+        assert len(deleted_items) == 0  # 該当するレコードが削除されていることを確認
+
+
+# class JsonldMapping:
+# .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+class TestJsonldMapping:
+    # def get_mapping_by_id(cls, id, ignore_deleted=True):
+    # .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping::test_get_mapping_by_id -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+    def test_get_mapping_by_id(app, db, item_type):
+        obj = JsonldMapping.create(
+            name="test1",
+            mapping={"test": "test"},
+            item_type_id=item_type.model.id,
+        )
+        assert JsonldMapping.get_mapping_by_id(obj.id) is obj
+        assert JsonldMapping.get_mapping_by_id(obj.id).is_deleted is False
+
+        # not found
+        assert JsonldMapping.get_mapping_by_id(999) is None
+
+        # Retrieval with include_deleted=False
+        obj.is_deleted = True
+        db.session.commit()
+        mapping = JsonldMapping.get_mapping_by_id(obj.id, include_deleted=False)
+        assert mapping is None
+
+        # Retrieve with include_deleted=True
+        obj.is_deleted = True
+        db.session.commit()
+        mapping = JsonldMapping.get_mapping_by_id(obj.id, include_deleted=True)
+        assert mapping.id == obj.id
+        assert mapping.is_deleted is True
+
+    # def create(cls, name, mapping, item_type_id):
+    # .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping::test_create -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+    def test_create(app, db, item_type):
+        # one
+        obj = JsonldMapping.create(
+            name="test1",
+            mapping={"test": "test"},
+            item_type_id=item_type[0]["item_type"].id,
+        )
+        assert obj.id == 1
+        assert (ItemTypeJsonldMapping.query.filter_by(id=obj.id).first()) == obj
+
+        # one more
+        obj = JsonldMapping.create(
+            name="test2",
+            mapping={"test": "test"},
+            item_type_id=item_type[0]["item_type"].id,
+        )
+        assert obj.id == 2
+        assert (ItemTypeJsonldMapping.query.filter_by(id=obj.id).first()) == obj
+
+        # occurs DB error. invalid item_type_id
+        with pytest.raises(SQLAlchemyError) as e:
+            JsonldMapping.create(
+                name="test2", mapping={"test": "test"}, item_type_id=999
+            )
+        assert isinstance(e.value, SQLAlchemyError)
+        assert ItemTypeJsonldMapping.query.filter_by(id=3).first() == None
+
+    # def update(cls, id, name=None, mapping=None, item_type_id=None):
+    # .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping::test_update -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+    def test_update(app, db, item_type, sword_mapping):
+        obj = JsonldMapping.create(
+            name="test1",
+            mapping={"test": "test"},
+            item_type_id=item_type.model.id,
+        )
+
+        # Update Successful
+        obj = JsonldMapping.update(
+            id=obj.id,
+            name="test2",
+            mapping={"test2": "test2"},
+            item_type_id=item_type.model.id,
+        )
+
+        result = ItemTypeJsonldMapping.query.filter_by(id=obj.id).first()
+        assert result == obj
+        assert result.name == "test2"
+        assert result.mapping == obj.mapping
+        assert result.version_id == 2
+
+
+        obj = JsonldMapping.update(
+            name="test2", id=999, mapping=None, item_type_id=sword_mapping[0]["item_type_id"]
+        )
+        assert obj is None
+
+        # Update with invalid item_type_id
+        with pytest.raises(SQLAlchemyError) as e:
+            JsonldMapping.update(name="test2", id=sword_mapping[0]["id"], mapping=None, item_type_id=999)
+        assert isinstance(e.value, SQLAlchemyError)
+
+    # def versions()
+    # .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping::test_versions -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+    def test_versions(app, db, item_type):
+
+        obj = JsonldMapping.create(
+            name="test1",
+            mapping={"test": "test"},
+            item_type_id=item_type.model.id,
+        )
+        obj.mapping = {"test2": "test2"}
+        db.session.commit()
+
+        versions = obj.versions.all()
+        assert len(versions) == 2
+        assert versions[0].id == obj.id
+        assert versions[1].id == obj.id
+        assert versions[0].mapping == {"test": "test"}
+        assert versions[1].mapping == obj.mapping
+        assert versions[0].version_id == 1
+        assert versions[1].version_id == 2
+
+    # delete(cls, id):
+    # .tox/c1/bin/pytest --cov=weko_swordserver tests/test_api.py::TestJsonldMapping::test_delete -v -vv -s --cov-branch --cov-report=term --cov-report=html --basetemp=/code/modules/weko-swordserver/.tox/c1/tmp --full-trace
+    def test_delete(app, db, item_type):
+        obj = JsonldMapping.create(
+            name="test1",
+            mapping={"test": "test"},
+            item_type_id=item_type.model.id,
+        )
+        obj.is_deleted = True
+        db.session.commit()
+
+        # Successful delete
+        JsonldMapping.delete(id=obj.id)
+        assert (
+            ItemTypeJsonldMapping.query.filter_by(id=obj.id).first().is_deleted == True
+        )
+
+        # Delete with non-existent id
+        res = JsonldMapping.delete(id=999)
+        assert res == None

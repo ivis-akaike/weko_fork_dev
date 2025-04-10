@@ -213,14 +213,11 @@ def pyfs_storage_factory(fileinstance=None, default_location=None,
 
         if fileinstance.uri:
             # Use already existing URL.
-            print('インスタンスURI')
             fileurl = fileinstance.uri
         else:
             assert default_location
-            print('インスタンスURIじゃない')
-            print(default_location)
             tmp_uri = default_location
-            print('ここ１')
+            # Generate a new URL.
             fileurl = make_path(
                 default_location,
                 str(fileinstance.id),
@@ -234,10 +231,6 @@ def pyfs_storage_factory(fileinstance=None, default_location=None,
         if location is None:
             location = next((loc for loc in locationList if str(loc.uri) in str(fileurl)), None)
 
-    print(locationList)
-    print(fileurl)
-    print('取得元')
-    print(location)
     return filestorage_class(
         fileurl, size=size, modified=modified, clean_dir=clean_dir, location=location)
 

@@ -297,6 +297,10 @@ msgid "Admin menu_Home"
 msgstr "Home"
 
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_ホーム"
+msgstr "Home"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_Item Types"
 msgstr "Item Types"
 
@@ -389,6 +393,10 @@ msgid "Admin menu_Items_Import"
 msgstr "Import"
 
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_Items_RO-Crate Import"
+msgstr "RO-Crate Import"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_Index Tree_Edit Tree"
 msgstr "Edit Tree"
 
@@ -439,6 +447,10 @@ msgstr "Flow List"
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_WorkFlow_WorkFlow List"
 msgstr "WorkFlow List"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_WorkFlow_WorkSpaceWorkFlow Setting"
+msgstr "WorkSpace WorkFlow Setting"
 
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_Communities_Community"
@@ -557,6 +569,10 @@ msgid "Admin menu_Setting_Items"
 msgstr "Items"
 
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_Setting_Activity"
+msgstr "Activity"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_Setting_Index Link"
 msgstr "Index Link"
 
@@ -654,6 +670,14 @@ msgstr "Restricted Access"
 #: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
 msgid "Admin menu_Setting_Faceted Search"
 msgstr "Faceted Search"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_Logs"
+msgstr "Logs"
+
+#: /weko-theme/weko_theme/templates/weko_theme/admin_layout.html:
+msgid "Admin menu_Logs_Export"
+msgstr "Export"
 
 msgid "Other"
 msgstr ""

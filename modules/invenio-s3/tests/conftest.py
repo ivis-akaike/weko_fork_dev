@@ -26,54 +26,77 @@ from sqlalchemy_utils.functions import create_database, database_exists
 
 from invenio_s3 import InvenioS3, S3FSFileStorage
 
-from weko_deposit.config import (
-    WEKO_BUCKET_QUOTA_SIZE,
-    WEKO_DEPOSIT_REST_ENDPOINTS as _WEKO_DEPOSIT_REST_ENDPOINTS,
-    _PID,
-    DEPOSIT_REST_ENDPOINTS as _DEPOSIT_REST_ENDPOINTS,
-    WEKO_MIMETYPE_WHITELIST_FOR_ES as _WEKO_MIMETYPE_WHITELIST_FOR_ES,
-    WEKO_DEPOSIT_BIBLIOGRAPHIC_INFO_SYS_KEY as _WEKO_DEPOSIT_BIBLIOGRAPHIC_INFO_SYS_KEY
-)
-from weko_indextree_journal.config import (
-    WEKO_INDEXTREE_JOURNAL_REST_ENDPOINTS as _WEKO_INDEXTREE_JOURNAL_REST_ENDPOINTS,
-)
-from weko_schema_ui.config import (
-    WEKO_SCHEMA_REST_ENDPOINTS as _WEKO_SCHEMA_REST_ENDPOINTS,
-)
+
 @pytest.fixture(scope='module')
 def app_config(app_config):
     """Customize application configuration."""
     app_config[
         'FILES_REST_STORAGE_FACTORY'] = 'invenio_s3.s3fs_storage_factory'
     app_config['S3_ENDPOINT_URL'] = None
-    app_config['S3_ACCESS_KEY_ID'] = 'test'
-    app_config['S3_SECRECT_ACCESS_KEY'] = 'test'
-    # app_config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db')
-    app_config['SQLALCHEMY_DATABASE_URI'] = \
-        os.getenv('SQLALCHEMY_DATABASE_URI', 'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest')
+
+    app_config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI',
+                                           'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest')
     app_config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
     app_config['TESTING'] = True
-    app_config['WEKO_DEPOSIT_REST_ENDPOINTS'] = \
-        copy.deepcopy(_WEKO_DEPOSIT_REST_ENDPOINTS)
-    app_config['WEKO_DEPOSIT_REST_ENDPOINTS']["depid"]["rdc_route"] = \
-        "/deposits/redirect/<{0}:pid_value>".format(_PID)
-    app_config['WEKO_DEPOSIT_REST_ENDPOINTS']["depid"]["pub_route"] = \
-        "/deposits/publish/<{0}:pid_value>".format(_PID)
-    app_config['WEKO_INDEXTREE_JOURNAL_REST_ENDPOINTS'] = \
-        copy.deepcopy(_WEKO_INDEXTREE_JOURNAL_REST_ENDPOINTS)
-    app_config['WEKO_INDEXTREE_JOURNAL_REST_ENDPOINTS']["tid"]["index_route"] = \
-        "/tree/index/<int:index_id>"
-    app_config['WEKO_SCHEMA_REST_ENDPOINTS'] = \
-        copy.deepcopy(_WEKO_SCHEMA_REST_ENDPOINTS)
-
+    app_config['S3_ACCESS_KEY_ID'] = 'test'
+    app_config['S3_SECRET_ACCESS_KEY'] = 'test'
     return app_config
 
 
 @pytest.fixture(scope='module')
 def create_app():
     """Application factory fixture."""
-    return create_api
+    def factory(**config):
+        app = Flask('testapp')
+        app.config.update(**config)
+
+        InvenioDB(app)
+        InvenioFilesREST(app)
+        InvenioS3(app)
+
+        return app
+
+    return factory
+
+@pytest.fixture(scope='module')
+def base_app():
+    """Flask application fixture."""
+    app = Flask('testapp')
+
+    app.config.update(
+    FILES_REST_STORAGE_FACTORY='invenio_s3:s3_storage_factory',
+    S3_ENDPOINT_URL=None,
+    S3_ACCESS_KEY_ID= '',
+    S3_SECRET_ACCESS_KEY = '',
+    SQLALCHEMY_DATABASE_URI = os.getenv('SQLALCHEMY_DATABASE_URI',
+                                           'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest'),
+    SQLALCHEMY_TRACK_MODIFICATIONS = True,
+    TESTING = True
+    )
+
+    InvenioDB(app)
+    InvenioFilesREST(app)
+    InvenioS3(app)
+
+    return app
+
+@pytest.yield_fixture(scope='module')
+def app(base_app):
+    """Flask application fixture."""
+    with base_app.app_context():
+        yield base_app
+
+
+@pytest.yield_fixture(scope='module')
+def database(app):
+    """Get setup database."""
+    if not database_exists(str(db_.engine.url)):
+        create_database(str(db_.engine.url))
+    db_.create_all()
+    yield db_
+    db_.session.remove()
+    db_.drop_all()
+    drop_alembic_version_table()
 
 @pytest.fixture(scope='module')
 def location_path():
@@ -100,7 +123,6 @@ def location(location_path, database):
     database.session.commit()
     return loc
 
-
 @pytest.fixture(scope='function')
 def s3_bucket(appctx):
     """S3 bucket fixture."""
@@ -108,7 +130,7 @@ def s3_bucket(appctx):
         session = boto3.Session(
             aws_access_key_id=current_app.config.get('S3_ACCESS_KEY_ID'),
             aws_secret_access_key=current_app.config.get(
-                'S3_SECRECT_ACCESS_KEY'),
+                'S3_SECRET_ACCESS_KEY'),
         )
         s3 = session.resource('s3')
         bucket = s3.create_bucket(Bucket='test_invenio_s3')

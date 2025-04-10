@@ -1427,6 +1427,174 @@ class Mapping(RecordBase):
             return [cls(obj.mapping, model=obj) for obj in query.all()]
 
 
+class JsonldMapping():
+    @classmethod
+    def create(cls, name, mapping, item_type_id):
+        """Create mapping.
+
+        Create new mapping for item type. ID is autoincremented.
+        mapping dict is dumped to JSON format.
+
+        Args:
+            name (str): Name of the mapping.
+            mapping (dict): Mapping in JSON format.
+            item_type_id (str): Target itemtype of the mapping.
+
+        Returns:
+            ItemTypeJsonldMapping: Created mapping object.
+
+        Raises:
+            SQLAlchemyError: An error occurred while creating the mapping.
+        """
+        obj = ItemTypeJsonldMapping(
+            name=name,
+            mapping=mapping or {},
+            item_type_id=item_type_id,
+        )
+
+        try:
+            with db.session.begin_nested():
+                db.session.add(obj)
+            db.session.commit()
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            raise
+
+        return obj
+
+
+    @classmethod
+    def update(cls, id, name, mapping, item_type_id):
+        """Update mapping.
+
+        Update mapping by ID. Specify the value to be updated.
+        The verion_id is incremented and the previousmapping moves to
+        the history table.
+
+        Args:
+            id (int): Mapping ID.
+            name (str, optional): Name of the mapping. Not required.
+            mapping (dict, optional): Mapping in JSON format. Not required.
+            item_type_id (str, optional):
+                Target itemtype of the mapping. Not required.
+
+        Returns:
+            ItemTypeJsonldMapping: Updated mapping object.
+
+        Raises:
+            WekoSwordserverException: When mapping not found.
+            SQLAlchemyError: An error occurred while updating the mapping.
+        """
+        obj = JsonldMapping.get_mapping_by_id(id)
+        if obj is None:
+            return None
+
+        obj.name = name
+        obj.mapping = mapping or {}
+        obj.item_type_id = item_type_id
+
+        try:
+            db.session.commit()
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            raise
+
+        return obj
+
+
+    @classmethod
+    def delete(cls, id):
+        """Delete mapping.
+
+        Soft-delete mapping by ID.
+
+        Args:
+            id (int): Mapping ID.
+
+        Returns:
+            ItemTypeJsonldMapping: Deleted mapping object.
+        """
+        obj = JsonldMapping.get_mapping_by_id(id)
+        if obj is not None:
+            obj.is_deleted = True
+            db.session.commit()
+        return obj
+
+
+    @classmethod
+    def get_mapping_by_id(cls, id, include_deleted=False):
+        """Get mapping by mapping_id.
+
+        Get mapping latest version by mapping_id.
+        If include_deleted=False, return None if the mapping is deleted(default).
+        Specify include_deleted=True to get the mapping even if it is deleted.
+
+        Args:
+            id (int): Mapping ID.
+            include_deleted (bool, optional):
+                Include deleted mapping. Default is False.
+
+        Returns:
+            ItemTypeJsonldMapping:
+            Mapping object. If not found or deleted, return `None`.
+        """
+
+        obj = (
+            ItemTypeJsonldMapping.query
+            .filter_by(id=id)
+            .first()
+        )
+
+        if not include_deleted and obj is not None and obj.is_deleted:
+            return None
+        return obj
+
+    @classmethod
+    def get_by_itemtype_id(cls, item_type_id, include_deleted=False):
+        """Get mapping by itemtype_id.
+
+        Get mapping latest version by itemtype_id.
+        If include_deleted=False, return None if the mapping is deleted(default).
+        Specify include_deleted=True to get the mapping even if it is deleted.
+
+        Args:
+            item_type_id (int): Itemtype ID.
+            include_deleted (bool, optional):
+                Include deleted mapping. Default is False.
+
+        Returns:
+            ItemTypeJsonldMapping:
+            Mapping object. If not found or deleted, return `None`.
+        """
+        query = (
+            ItemTypeJsonldMapping.query
+            .filter_by(item_type_id=item_type_id)
+            .order_by(ItemTypeJsonldMapping.updated.desc())
+        )
+        if include_deleted:
+            query.filter_by(is_deleted=False)
+
+        return query.all()
+
+    @classmethod
+    def get_all(cls, include_deleted=False):
+        """Get all mapping.
+
+        Get all mapping. If include_deleted=False, return only active mapping.
+        Specify include_deleted=True to get all mapping including deleted.
+
+        Args:
+            include_deleted (bool, optional):
+                Include deleted mapping. Default is False.
+
+        Returns:
+            list[ItemTypeJsonldMapping]: List of mapping objects.
+        """
+        query = ItemTypeJsonldMapping.query
+        if not include_deleted:
+            query = query.filter_by(is_deleted=False)
+        return query.all()
+
 class ItemTypeProps(RecordBase):
     """Define API for Itemtype Property creation and manipulation."""
 
@@ -2093,62 +2261,110 @@ class SiteLicense(RecordBase):
     """Define API for SiteLicense creation and manipulation."""
 
     @classmethod
-    def get_records(cls):
+    def get_records(cls, user=None):
         """Retrieve multiple records.
 
         :returns: A list of :class:`Record` instances.
         """
+        from invenio_communities.models import Community
         with db.session.no_autoflush:
-            sl_obj = SiteLicenseInfo.query.order_by(
-                SiteLicenseInfo.organization_id).all()
+            if not user:
+                sl_obj = SiteLicenseInfo.query.order_by(
+                    SiteLicenseInfo.organization_id).all()
+            else:
+                if any(role.name in current_app.config['WEKO_PERMISSION_SUPER_ROLE_USER'] for role in user.roles):
+                    sl_obj = SiteLicenseInfo.query.order_by(
+                        SiteLicenseInfo.organization_id).all()
+                else:
+                    repositories = Community.get_repositories_by_user(user)
+                    repository_ids = [repository.id for repository in repositories]
+                    sl_obj = SiteLicenseInfo.query.filter(SiteLicenseInfo.repository_id.in_(repository_ids)).order_by(
+                        SiteLicenseInfo.organization_id).all()
             return [cls(dict(obj)) for obj in sl_obj]
 
     @classmethod
     def update(cls, obj):
         """Update method."""
-        def get_addr(lst, id_):
-            if lst and isinstance(lst, list):
-                sld = []
-                for j in range(len(lst)):
-                    sl = SiteLicenseIpAddress(
-                        organization_id=id_,
-                        organization_no=j + 1,
-                        start_ip_address='.'.join(
-                            lst[j].get('start_ip_address')),
-                        finish_ip_address='.'.join(
-                            lst[j].get('finish_ip_address'))
-                    )
-                    sld.append(sl)
-                return sld
+        def get_repository_ids():
+            """Get repository ID based on user's roles."""
+            from flask_login import current_user
+            from invenio_communities.models import Community
+            if any(role.name in current_app.config['WEKO_PERMISSION_SUPER_ROLE_USER'] for role in current_user.roles):
+                return ["Root Index"]
+            repositories = Community.get_repositories_by_user(current_user)
+            if repositories:
+                return [repository.id for repository in repositories]
+            raise Exception("No repository found for the user")
 
+        def get_existing_entries(repository_ids):
+            """Get existing site license entries for the repository."""
+            if "Root Index" in repository_ids:
+                return {info.organization_name: info for info in SiteLicenseInfo.query.all()}
+            return {info.organization_name: info for info in SiteLicenseInfo.query.filter(SiteLicenseInfo.repository_id.in_(repository_ids)).all()}
+
+        def get_addr(lst, organization_id):
+            """Convert address list to SiteLicenseIpAddress instances."""
+            if not lst or not isinstance(lst, list):
+                return []
+
+            return [
+                SiteLicenseIpAddress(
+                    organization_id=organization_id,
+                    organization_no=j + 1,
+                    start_ip_address='.'.join(item.get('start_ip_address')),
+                    finish_ip_address='.'.join(item.get('finish_ip_address'))
+                )
+                for j, item in enumerate(lst)
+            ]
         # update has_site_license field on item type name tbl
         ItemTypeNames.update(obj.get('item_type'))
+        repository_ids = get_repository_ids()
+
         site_license = obj.get('site_license')
-        if isinstance(site_license, list):
-            # delete all rows first
-            SiteLicenseIpAddress.query.delete()
-            SiteLicenseInfo.query.delete()
-            # add new rows
-            if site_license:
-                sif = []
-                for i in range(len(site_license)):
-                    lst = site_license[i]
-                    if lst.get('mail_address'):
-                        receive_mail_flag = lst.get('receive_mail_flag')
-                    else:
-                        receive_mail_flag = 'F'
-                    slif = SiteLicenseInfo(
-                        organization_id=i + 1,
-                        organization_name=lst.get('organization_name'),
-                        receive_mail_flag=receive_mail_flag,
-                        mail_address=lst.get('mail_address'),
-                        domain_name=lst.get('domain_name'),
-                        addresses=get_addr(
-                            lst.get('addresses'),
-                            i))
-                    sif.append(slif)
-                # add new rows
-                db.session.add_all(sif)
+        if not isinstance(site_license, list):
+            return
+
+        existing_entries = get_existing_entries(repository_ids)
+        new_entries = {}
+
+        for lst in site_license:
+            org_name = lst.get('organization_name')
+            receive_mail_flag = lst.get('receive_mail_flag', 'F') if lst.get('mail_address') else 'F'
+
+            if org_name in existing_entries:
+                # Update existing entry
+                slif = existing_entries[org_name]
+                slif.receive_mail_flag = receive_mail_flag
+                slif.mail_address = lst.get('mail_address')
+                slif.domain_name = lst.get('domain_name')
+
+                # Update addresses
+                for addr in slif.addresses:
+                    db.session.delete(addr)
+                new_addresses = get_addr(lst.get('addresses'), slif.organization_id)
+                slif.addresses = new_addresses
+
+                new_entries[org_name] = slif
+            else:
+                # Create new entry
+                slif = SiteLicenseInfo(
+                    organization_name=org_name,
+                    receive_mail_flag=receive_mail_flag,
+                    mail_address=lst.get('mail_address'),
+                    domain_name=lst.get('domain_name'),
+                    repository_id=lst.get('repository_id') if lst.get('repository_id') else repository_ids[0]
+                )
+                slif.addresses = get_addr(lst.get('addresses'), slif.organization_id)
+                new_entries[org_name] = slif
+                db.session.add(slif)
+
+        # Remove obsolete entries
+        obsolete_entries = set(existing_entries.keys()) - set(new_entries.keys())
+        for org_name in obsolete_entries:
+            target = existing_entries[org_name]
+            for addr in target.addresses:
+                db.session.delete(addr)
+            db.session.delete(target)
 
 
 class RevisionsIterator(object):
@@ -2245,6 +2461,7 @@ class FeedbackMailList(object):
         :param feedback_maillist: list mail feedback
         :return boolean: True if success
         """
+        from invenio_communities.utils import get_repository_id_by_item_id
         with db.session.begin_nested():
             query_object = _FeedbackMailList.query.filter_by(
                 item_id=item_id).one_or_none()
@@ -2261,7 +2478,8 @@ class FeedbackMailList(object):
                 query_object = _FeedbackMailList(
                     item_id=item_id,
                     mail_list=mail_list,
-                    account_author=",".join(list(account_author_set))
+                    account_author=",".join(list(account_author_set)),
+                    repository_id=get_repository_id_by_item_id(item_id)
                 )
                 db.session.add(query_object)
             else:
@@ -2329,7 +2547,7 @@ class FeedbackMailList(object):
             return []
 
     @classmethod
-    def get_feedback_mail_list(cls):
+    def get_feedback_mail_list(cls, repo_id=None):
         """Get feedback mail list for send mail."""
         mail_list = {}
         checked_author_id = {}
@@ -2344,7 +2562,11 @@ class FeedbackMailList(object):
             PersistentIdentifier.pid_type == 'recid',
             PersistentIdentifier.status == PIDStatus.REGISTERED,
             PersistentIdentifier.pid_value.notlike("%.%")
-        ).all()
+        )
+
+        if repo_id:
+            data = data.filter(_FeedbackMailList.repository_id == repo_id)
+        data = data.all()
 
         # create return data
         for d in data:

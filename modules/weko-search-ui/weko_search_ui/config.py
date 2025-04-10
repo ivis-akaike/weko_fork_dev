@@ -85,6 +85,9 @@ SEARCH_UI_JSTEMPLATE_SORT_ORDER = "templates/weko_search_ui/togglebutton.html"
 WEKO_ITEM_ADMIN_IMPORT_TEMPLATE = "weko_search_ui/admin/import.html"
 """import template for the import page."""
 
+WEKO_ITEM_ADMIN_ROCRATE_IMPORT_TEMPLATE = "weko_search_ui/admin/rocrate_import.html"
+"""import template for the rocrate import page."""
+
 WEKO_SEARCH_UI_ADMIN_EXPORT_TEMPLATE = "weko_search_ui/admin/export.html"
 """Template for the Admin Bulk Export page."""
 
@@ -125,6 +128,13 @@ RECORDS_REST_ENDPOINTS["recid"]["record_serializers"] = {
         "weko_records.serializers:csl_v1_response"
     ),
     "text/x-bibliography": ("weko_records.serializers:citeproc_v1_response"),
+}
+
+# Workspace endpoint
+RECORDS_REST_ENDPOINTS["worksapce"] = pickle.loads(pickle.dumps(RECORDS_REST_ENDPOINTS["recid"], -1))
+RECORDS_REST_ENDPOINTS["worksapce"]["list_route"] = "/workspace/search"
+RECORDS_REST_ENDPOINTS["worksapce"]["search_serializers"] = {
+    "application/json": ("weko_records.serializers:opensearch_v1_search"),
 }
 
 # RECORDS_REST_ENDPOINTS['recid']['read_permission_factory_imp'] = allow_all
@@ -469,7 +479,8 @@ WEKO_SYS_USER = "System Administrator"
 
 WEKO_REPO_USER = "Repository Administrator"
 
-WEKO_FLOW_DEFINE = {"flow_name": "Registration Flow"}
+WEKO_FLOW_DEFINE = {"flow_name": "Registration Flow",
+                    "repository_id": "Root Index",}
 
 WEKO_FLOW_DEFINE_LIST_ACTION = [
     {
@@ -711,7 +722,10 @@ WEKO_SEARCH_UI_TO_NUMBER_FORMAT = "99999999999999.99"
 WEKO_SEARCH_UI_BULK_EXPORT_RUN_MSG = "RUN_MSG_EXPORT_ALL"
 """Bulk export running message."""
 
-WEKO_SEARCH_UI_BULK_EXPORT_EXPIRED_TIME = 3
+WEKO_SEARCH_UI_BULK_EXPORT_FILE_CREATE_RUN_MSG = "RUN_MSG_EXPORT_ALL_FILE_CREATE"
+"""Bulk export file create running message."""
+
+WEKO_SEARCH_UI_BULK_EXPORT_EXPIRED_TIME = 1440
 """Template for the Admin Bulk Export page."""
 
 WEKO_SEARCH_UI_BULK_EXPORT_TASKID_EXPIRED_TIME = 1
@@ -724,6 +738,9 @@ WEKO_SEARCH_UI_BULK_EXPORT_RETRY = 5
 
 WEKO_SEARCH_UI_IMPORT_TMP_PREFIX = "weko_import_"
 """Import tmp prefix."""
+
+WEKO_SEARCH_UI_ROCRATE_IMPORT_TMP_PREFIX = "weko_rocrate_import_"
+"""RO-Crate Import tmp prefix."""
 
 WEKO_SEARCH_UI_IMPORT_UNUSE_FILES_URI = "import_unuse_files_uri_{}"
 """Cache key unuse file. uri."""
@@ -738,6 +755,11 @@ CELERY_TASK_TRACK_STARTED=True
 WEKO_SEARCH_UI_FACET_LANG_DISP_FLG = False
 """ Enable the Facet Search specified language display feature. """
 
+CHILD_INDEX_THUMBNAIL_WIDTH = 100
+""" child index thumbnail width in result index serch"""
+
+CHILD_INDEX_THUMBNAIL_HEIGHT = 100
+""" child index thumbnail height in result index serch"""
 
 WEKO_SEARCH_UI_API_LIMIT_RATE_DEFAULT = ['100 per minute']
 
