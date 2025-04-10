@@ -10,17 +10,19 @@
 
 import os
 import re
-import json
-import itertools
 import xmltodict
 from datetime import date
 from functools import partial
+from rocrate.rocrate import ROCrate
+from rocrate.model.contextentity import ContextEntity
 
 from flask import current_app, url_for
 
 from weko_records.api import Mapping, ItemTypes, FeedbackMailList, ItemLink
 from weko_records.models import ItemType
 from weko_records.serializers.utils import get_full_mapping
+
+from .config import ROCRATE_METADATA_FILE
 
 DEFAULT_FIELD = [
     "title",
@@ -1166,6 +1168,13 @@ class JsonMapper(BaseMapper):
 
     """
     def __init__(self, json, itemtype_id=None, itemtype_name=None):
+        """Initilize JsonMapper.
+
+        Args:
+            json (dict): metadata with json format.
+            itemtype_id (int, optional): item type id. Defaults to None.
+            itemtype_name (str, optional): item type name. Defaults to None.
+        """
         self.json = json
         if itemtype_id is not None:
             self.itemtype = ItemTypes.get_by_id(itemtype_id)
@@ -1180,7 +1189,7 @@ class JsonMapper(BaseMapper):
                 if self.itemtype_name == item:
                     self.itemtype = BaseMapper.itemtype_map.get(item)
 
-    def _create_item_map(self):
+    def _create_item_map(self, detail=False):
         """ Create Mapping information from ItemType.
 
             This mapping information consists of the following.
@@ -1194,19 +1203,19 @@ class JsonMapper(BaseMapper):
                 item_map: Mapping information about ItemType.
 
             Examples:
-                For example, in the case of “Title of BioSample of ItemType”,
+                For example, in the case of “Title of Default ItemType”,
                 it would be as follows.
 
-                KEY: title.Title
-                VALUE: item_1723710826523.subitem_1551255647225
+                KEY: Title.タイトル
+                VALUE: item_30001_title0.subitem_title
         """
 
         item_map = {}
         for prop_k, prop_v in self.itemtype.schema["properties"].items():
-            self._apply_property(item_map, "", "", prop_k, prop_v)
+            self._apply_property(item_map, "", "", prop_k, prop_v, detail)
         return item_map
 
-    def _apply_property(self, item_map, key, value, prop_k, prop_v):
+    def _apply_property(self, item_map, key, value, prop_k, prop_v, detail):
         """
             This process is part of “_create_item_map” and is not
             intended for any other use.
@@ -1216,11 +1225,14 @@ class JsonMapper(BaseMapper):
             value = value + "." + prop_k if value else prop_k
 
         if prop_v["type"] == "object":
+            item_map.update({key: value}) if detail else None
             for child_k, child_v in prop_v["properties"].items():
-                self._apply_property(item_map, key, value, child_k, child_v)
+                self._apply_property(
+                    item_map, key, value, child_k, child_v, detail)
         elif prop_v["type"] == "array":
+            item_map.update({key: value}) if detail else None
             self._apply_property(
-                item_map, key, value, "items", prop_v["items"])
+                item_map, key, value, "items", prop_v["items"], detail)
         else:
             item_map[key] = value
 
@@ -1268,7 +1280,7 @@ class JsonMapper(BaseMapper):
         }
 
     def _get_required(self, schema, parent=None):
-        required = schema.get("required", []).copy()
+        required = schema.get("required", [])
         for k, v in schema.get("properties", {}).items():
             if v.get("type") == "object":
                 required.extend([
@@ -1302,7 +1314,7 @@ class JsonMapper(BaseMapper):
             """DOI_RA for grant. .DOI_RA in tsv"""
             self.doi = ""
             """DOI for grant. .DOI in tsv"""
-            self.metadata_replace = False
+            self.metadata_only = False
             """Flag to save only metadata. for SWORD deposit."""
 
 
@@ -1317,7 +1329,12 @@ class JsonLdMapper(JsonMapper):
     }
 
     def __init__(self, itemtype_id, json_mapping):
-        """Init."""
+        """Initilize JsonLdMapper.
+
+        Args:
+            itemtype_id (int): item type id.
+            json_mapping (dict): mapping between json-ld and item type metadata.
+        """
         self.json_mapping = json_mapping
         super().__init__(None, itemtype_id)
 
@@ -1393,16 +1410,6 @@ class JsonLdMapper(JsonMapper):
                 if prop_name in item_map
         }
 
-        fixed_properties = {}
-        for k, v in properties_mapping.items():
-            if k.startswith("$") and "." in v:
-                key = v[:v.rfind(".")]
-                sub_key = v[v.rfind(".")+1:]
-                value = k[1:]
-                if key not in fixed_properties:
-                    fixed_properties[key] = {}
-                fixed_properties[key][sub_key] = value
-
         mapped_metadata = self._InformedMetadata()
         mapped_metadata.id = metadata.id
         mapped_metadata.link_data = metadata.link_data
@@ -1415,16 +1422,15 @@ class JsonLdMapper(JsonMapper):
             if filename.startswith("data/")
         ]
         mapped_metadata.save_as_is = metadata.save_as_is
-        mapped_metadata.metadata_replace = metadata.metadata_replace
-        mapped_metadata.update({"id": metadata["id"]} if "id" in metadata else {})
-        mapped_metadata.update({"uri": metadata["uri"]} if "uri" in metadata else {})
         mapped_metadata.setdefault("publish_status", "private")
         mapped_metadata.setdefault("edit_mode", "Keep")
 
         missing_metadata = {}
 
-        def _empty_metadata(parent_prop_key):
-            return fixed_properties.get(parent_prop_key, {})
+        def _empty_metadata():
+            return {
+                # TODO: FIXED VALUE
+            }
 
         def _set_metadata(
             parent, META_KEY, meta_props, PROP_PATH, prop_props
@@ -1458,13 +1464,13 @@ class JsonLdMapper(JsonMapper):
                 # The corresponding layers are different,
                 # so the prop_path needs to progress to the lower layer.
                 if self._get_property_type(parent_prop_key) == "object":
-                    sub_prop_object = parent.get(
-                        prop_props[0], {} # TODO: FIXED VALUE
-                    )
+                    sub_prop_object = parent.get(prop_props[0], {
+                        # TODO: FIXED VALUE
+                    })
                     # FIXME: check sub_sub propaty type
-                    sub_sub_object = sub_prop_object.get(
-                        prop_props[1], {} # TODO: FIXED VALUE
-                    )
+                    sub_sub_object = sub_prop_object.get(prop_props[1], {
+                        # TODO: FIXED VALUE
+                    })
                     _set_metadata(
                         sub_sub_object, META_KEY, meta_props[1:],
                         PROP_PATH, prop_props[1:]
@@ -1475,12 +1481,13 @@ class JsonLdMapper(JsonMapper):
                     sub_prop_array = parent.get(prop_props[0], [])
                     index = 0 if index is None else index
                     if len(sub_prop_array) <= index:
-                        sub_prop_array.extend([
-                            {} # TODO: FIXED VALUE
-                            for _ in range(index - len(sub_prop_array) + 1)
-                        ])
+                        sub_prop_array.extend([{
+                            # TODO: FIXED VALUE
+                        } for _ in range(index - len(sub_prop_array) + 1)])
                     # FIXME: check sub_sub propaty type
-                    sub_sub_object = {} # TODO: FIXED VALUE
+                    sub_sub_object = {
+                        # TODO: FIXED VALUE
+                    }
                     _set_metadata(
                         sub_sub_object, META_KEY, meta_props,
                         PROP_PATH, prop_props[1:]
@@ -1489,9 +1496,9 @@ class JsonLdMapper(JsonMapper):
                     parent.update({prop_props[0]: sub_prop_array})
                 return
             if self._get_property_type(parent_prop_key) == "object":
-                sub_prop_object = parent.get(
-                    prop_props[0], _empty_metadata(parent_prop_key)
-                )
+                sub_prop_object = parent.get(prop_props[0], {
+                    # TODO: FIXED VALUE
+                })
                 if index is not None and index > 1:
                     return
                 _set_metadata(
@@ -1504,10 +1511,9 @@ class JsonLdMapper(JsonMapper):
                 sub_prop_array = parent.get(prop_props[0], [])
                 index = 0 if index is None else index
                 if len(sub_prop_array) <= index:
-                    sub_prop_array.extend([
-                        _empty_metadata(parent_prop_key)
-                        for _ in range(index - len(sub_prop_array) + 1)
-                    ])
+                    sub_prop_array.extend([{
+                        # TODO: FIXED VALUE
+                    } for _ in range(index - len(sub_prop_array) + 1)])
                 _set_metadata(
                     sub_prop_array[index], META_KEY, meta_props[1:],
                     PROP_PATH, prop_props[1:]
@@ -1529,7 +1535,7 @@ class JsonLdMapper(JsonMapper):
                 # TODO: implement handling author_id
                 feedback_mail_list = metadata.get("feedback_mail_list", [])
                 feedback_mail_list.append({
-                    "email": metadata.get(META_KEY), "author_id": ""}
+                    "mail": metadata.get(META_KEY), "author_id": ""}
                 )
                 mapped_metadata["feedback_mail_list"] = feedback_mail_list
             # TODO: implement request mail list
@@ -1548,20 +1554,6 @@ class JsonLdMapper(JsonMapper):
                     mapped_metadata, META_KEY, meta_props,
                     PROP_PATH, prop_props
                 )
-
-        # Check if "Extra" prepared in itemtype schema form item_map
-        if "Extra" in item_map:
-            prop_type = self._get_property_type(item_map["Extra"])
-            if prop_type == "object":
-                # TODO: replace "subitem_text_value" with correct name
-                mapped_metadata[item_map.get("Extra")] = {
-                    "subitem_text_value": str(missing_metadata)
-                }
-            else:
-                mapped_metadata[item_map.get("Extra")] = [
-                    {"subitem_text_value": str(missing_metadata)}
-                ]
-
 
         files_info = []
         for v in item_map.values():
@@ -1585,65 +1577,108 @@ class JsonLdMapper(JsonMapper):
             })
         mapped_metadata["files_info"] = files_info
         # result = {
-        #     "pubdate": self.json_id.get("datePublished"),
+        #     "pubdate": "2021-10-15",
         #     "publish_status": "private",
-        #     "path": self.json_id.get("wk:index"),
-        #     "item_1617186331708": {},
-        #     "item_1617258105262": {},
+        #     "path": [1623632832836],
+        #     "item_1617186331708": {...},
+        #     "item_1617258105262": {...},
         #     ...
         # }
         return mapped_metadata
 
-    @staticmethod
-    def process_json_ld(json_ld):
-        """Process json-ld.
+    @classmethod
+    def _deconstruct_json_ld(cls, json_ld):
+        """Deconstruct json-ld.
 
-        Make metadata json-ld data flat.
-        Pick up metadata from @graph and resolve links
+        Deconstructing json-ld metadata values ​​one by one
         to be able to use in mapping to WEKO item type.
+        If json-ld is in RO-Crate format, resolve links and
+        pick up metadata from @graph and resolve links.
 
         Note:
             SWORDBagIt metadata format is not supported yet.
 
         Args:
-            json_ld (dict): Json-ld data.
+            json_ld (dict): Json-ld in SWORD BagIt or RO-Crate format.
 
         Returns:
-            dict: Processed json data.
+            list[dict]: Deconstructed json data list.
+
+        Raises:
+            ValueError: Invalid json-ld format.
+
+        Examples:
+
+            >>> json_ld = {
+            ...   "@context": "https://w3id.org/ro/crate/1.1/context",
+            ...   "@graph": [
+            ...     {
+            ...       "@id": "./",
+            ...       "dc:title": {
+            ...         "value": "Title"
+            ...         "language": "en"
+            ...       },
+            ...       "dc:creator": [
+            ...         {
+            ...           "@id": "https://orcid.org/0000-0002-1825-0097"
+            ...         },
+            ...         {
+            ...           "@id": "https://orcid.org/0000-0002-1825-0098"
+            ...         }
+            ...       ]
+            ...     }
+            ...   ]
+            ... }
+            >>> JsonLdMapper.process_json_ld(json_ld)
+            [
+              {
+                "dc.title.value": "Title",
+                "dc.title.language": "en",
+                "dc.creator[0].@id": "https://orcid.org/0000-0002-1825-0097",
+                "dc.creator[1].@id": "https://orcid.org/0000-0002-1825-0098"
+              }
+            ]
         """
-        metadata = {}
+        extracted = {}
         context = json_ld.get("@context", "")
         format = ""
-        # check if the json-ld context is valid
+        # Check if the json-ld context is valid
         if "https://swordapp.github.io/swordv3/swordv3.jsonld" in context:
             # TODO: support SWORD json-ld format
             format = "sword-bagit"
-            pass
+            extracted = json_ld
         elif (
             "https://w3id.org/ro/crate/1.1/context" in context
                 or isinstance(context, dict)
                 and "https://w3id.org/ro/crate/1.1/context" in context.values()
             ):
-            # check structure of RO-Crate json-ld
+            # Check structure of RO-Crate json-ld
             format = "ro-crate"
-            if "@graph" not in json_ld or not isinstance(json_ld.get("@graph"), list):
+            if "@graph" not in json_ld or not isinstance(json_ld["@graph"], list):
                 raise ValueError('Invalid json-ld format: "@graph" is not found.')
-            # transform list which contains @id to dict in @graph
-            for v in json_ld.get("@graph"):
-                if isinstance(v, dict) and "@id" in v:
-                    metadata.update({v["@id"]: v})
-                else:
-                    raise ValueError('Invalid json-ld format: Objects without "@id" are directly under "@graph"')
+            # Convert the list containing @id in @graph to a dict
+            try:
+                extracted = {v["@id"]: v for v in json_ld["@graph"]}
+            except KeyError as ex:
+                raise ValueError(
+                    'Invalid json-ld format: Objects without "@id" '
+                    'are directly under "@graph"'
+                ) from ex
+            rocrate_entity_key = ROCRATE_METADATA_FILE.split("/")[-1]
+            if rocrate_entity_key not in extracted:
+                raise ValueError(
+                    f'Invalid json-ld format: "{rocrate_entity_key}" entity is not found.'
+                )
         else:
-            raise ValueError('Invalid json-ld format: "@context" is not found.')
-        if metadata is None:
+            raise ValueError('Invalid json-ld format: "@context" is invalid.')
+        if not extracted:
             raise ValueError("Invalid json-ld format: Metadata is not found.")
 
-
         def _resolve_link(parent, key, value):
+            """Resolve links in json-ld metadata and restore hierarchy."""
             if isinstance(value, dict):
-                if len(value) == 1 and "@id" in value and value["@id"] in metadata:
-                    parent[key] = metadata[value["@id"]]
+                if len(value) == 1 and "@id" in value and value["@id"] in extracted:
+                    parent[key] = extracted[value["@id"]]
                 else:
                     for k, v in value.items():
                         _resolve_link(value, k, v)
@@ -1669,14 +1704,6 @@ class JsonLdMapper(JsonMapper):
         list_deconstructed = []
         for extracted in list_extracted:
             metadata = cls._deconstruct_dict(extracted, cls._InformedMetadata())
-            metadata.update(
-                {"id": extracted["identifier"]}
-                if "identifier" in extracted else {}
-            )
-            metadata.update(
-                {"uri": extracted["uri"]}
-                if "uri" in extracted else {}
-            )
             metadata.id = extracted["@id"]
             metadata.link_data = [
                 {"item_id": link.get("identifier"), "sele_id" : link.get("value")}
@@ -1690,7 +1717,6 @@ class JsonLdMapper(JsonMapper):
                     if not file.get("wk:textExtraction", True)
             ]
             metadata.save_as_is = extracted.get("wk:saveAsIs", False)
-            metadata.metadata_replace = extracted.get("wk:metadataReplace", False)
             list_deconstructed.append(metadata)
 
         return list_deconstructed, format
@@ -1718,18 +1744,18 @@ class JsonLdMapper(JsonMapper):
             if isinstance(value, dict):
                 for k, v in value.items():
                     key_name = key if parent == "" else f"{parent}.{key}"
-                    _parse_metadata(key_name, k, v)
+                    _deconstructer(metadata, key_name, k, v)
             elif isinstance(value, list):
                 for i, d in enumerate(value):
                     key_name = f"{key}[{i}]" if parent == "" else f"{parent}.{key}[{i}]"
                     if isinstance(d, dict):
                         for k, v in d.items():
-                            _parse_metadata(key_name, k, v)
+                            _deconstructer(metadata, key_name, k, v)
                     else:
-                        processed_metadata[key_name] = d
+                        metadata[key_name] = d
             else:
                 key_name = key if parent == "" else f"{parent}.{key}"
-                processed_metadata[key_name] = value
+                metadata[key_name] = value
 
         return_data = {} if return_data is None else return_data
         for key, value in dict_data.items():
@@ -1737,7 +1763,7 @@ class JsonLdMapper(JsonMapper):
 
         return return_data
 
-    def to_rocrate_metadata(self, metadata, **kwargs):
+    def to_rocrate_metadata(self, metadata):
         """Map to RO-Crate format.
 
         Args:
@@ -1755,70 +1781,13 @@ class JsonLdMapper(JsonMapper):
                 if prop_name in item_map
         }
 
-        # generate @id
-        id_template = "_:{s}_{i}"
-        _sequential = (id_template.format(i=i, s="{s}") for i in itertools.count())
-        gen_id = lambda key: next(_sequential).format(s=key)
-
         rocrate = ROCrate()
 
         rocrate.name = metadata["title"][0]
         rocrate.description = metadata["item_title"]
         rocrate.datePublished = metadata["publish_date"]
-        rocrate.root_dataset["identifier"] = metadata["control_number"]
-        rocrate.root_dataset["uri"] = url_for(
-            "invenio_records_ui.recid",
-            pid_value=metadata["control_number"], _external=True
-        )
         rocrate.root_dataset["wk:publishStatus"] = (
             "public" if metadata["publish_status"] == "0" else "private")
-        rocrate.root_dataset["wk:index"] = metadata.get("path", [])
-        rocrate.root_dataset["wk:editMode"] = "Keep"
-
-
-        # wk:feedbackMail
-        feedback_mail_list = FeedbackMailList.get_mail_list_by_item_id(
-            metadata["control_number"]
-        )
-        rocrate.root_dataset["wk:feedbackMail"] = feedback_mail_list
-        rocrate.root_dataset["wk:index"] = metadata.get("path", [])
-        rocrate.root_dataset["wk:editMode"] = "Keep"
-
-        # wk:textExtraction
-        for k, v in properties_mapping.items():
-            if k.endswith(".filename"):
-                list_k_file = v.split(".")[1:]
-                break
-
-        extracted_files = kwargs.get("extracted_files", [])
-        for file in rocrate.root_dataset.get("hasPart", []):
-            for k_file in list_k_file[:-1]:
-                file = file[k_file]
-            if file[list_k_file[-1]] not in extracted_files:
-                file["wk:textExtraction"] = False
-                rocrate.add(file)
-
-        # wk:itemLinks
-        list_item_link_info = ItemLink.get_item_link_info(
-            metadata["control_number"]
-        )
-        list_entity = []
-        list_at_id = []
-        for item_link_info in list_item_link_info:
-            dict_item_link = {
-                "identifier": item_link_info.item_links,
-                "value": item_link_info.value
-            }
-            list_entity.append(dict_item_link)
-            list_at_id.append(gen_id("itemLinks"))
-        add_list_entity(
-            rocrate.root_dataset, "wk:itemLinks", list_at_id, "PropertyValue",
-            list_entity
-        )
-
-        # wk:metadaAutoFill
-        rocrate.root_dataset["wk:metadataAutoFill"] = False
-
 
 
         entity_factory = lambda typename: type(typename, (ContextEntity,), {
@@ -1900,217 +1869,24 @@ class JsonLdMapper(JsonMapper):
             parent[key] = value
             return parent
 
-        def ensure_entity_list_size(parent, key, at_type, size):
-            """Ensure list size including empty entity.
-
-            Args:
-                parent (_type_): Parent entity
-                key (_type_): Key of ro-crate-metadata.json
-                at_type (_type_): _description_
-                size (_type_): _description_
-            """
-            if key not in parent or parent.get(key) is None:
-                parent[key] = []
-
-            current_size = len(parent[key])
-            for i in range(current_size, size):
-                append_entity(parent, key, gen_id(key), at_type)
-            return
-
-        def extract_list_indices(meta_props, prop_props, property_map):
-            """Exteract list indices.
-
-            Args:
-                meta_props (list): _description_
-                prop_props (list): _description_
-                property_map (dict): _description_
-
-            Returns:
-                list: _description_
-            """
-            list_index = []
-            for prop in meta_props:
-                m = re.search(r"\[(\d+)\]", prop)
-                list_index.append(int(m.group(1)) if m else None)
-
-            # case: list_index > prop_props
-            if len(list_index) > len(prop_props):
-                list_non_corresponding = []
-                definition_key = ""
-
-                for i, meta_key in enumerate(meta_props):
-                    definition_key += re.sub(r'\[\d+\]$', '', meta_key)
-                    if definition_key not in property_map:
-                        list_non_corresponding.append(i)
-                    definition_key += "."
-                list_index = [
-                    index for i, index in enumerate(list_index) if i not in list_non_corresponding
-                ]
-            # case: list_index < prop_props
-            elif len(list_index) < len(prop_props):
-                list_non_corresponding = []
-                definition_key = ""
-                reversed_map = {v: k for k, v in property_map.items()}
-
-                for i, prop_key in enumerate(prop_props):
-                    definition_key += prop_key
-                    if definition_key not in reversed_map:
-                        list_non_corresponding.append(i)
-                    definition_key += "."
-                for i in sorted(list_non_corresponding):
-                    list_index.insert(i, None)
-            return list_index
-
-        def gen_type(meta_path):
-            """Generate "@type" of entity by using AT_TYPE_MAP.
-
-            Args:
-                meta_path (str): Key of metadata.
-
-            Returns:
-                str: "@type" of entity.
-            """
-            for k, v in self.item_map.items():
-                if v == meta_path:
-                    meta_key = k
-                    break
-
-            for k, v in self.AT_TYPE_MAP.items():
-                if k in meta_key:
-                    return v
-            return "PropertyValue"
-
-        def _set_rocrate_metadata(
-            parent, META_PATH, META_KEY, meta_props, PROP_PATH, prop_props, deconstructed
-        ):
-            # Get list_index
-            list_index = extract_list_indices(meta_props, prop_props, properties_mapping)
-
-            # case: prop_props = []
-            if len(prop_props) == 0:
-                raise Exception("prop_props is empty")
-
-            # case: prop_props = [prop]
-            if len(prop_props) == 1:
-                index = list_index[0] if list_index else None
-                prop = prop_props[0]
-                at_type = gen_type()
-                # at_type = type_map[prop] if prop in type_map else "PropertyValue"
-
-                # dict
-                if index is None:
-                    # If prop is "@id", do nothing.
-                    if prop == "@id":
-                        pass
-                    # If prop is under root, add property directly.
-                    else:
-                        parent[prop] = deconstructed[META_KEY]
-                # list
-                else:
-                    ensure_entity_list_size(parent, prop, at_type, index + 1)
-                    parent[prop][index] = deconstructed[META_KEY]
-
-                return
-
-            _set_child_rocrate_metadata(
-                parent, META_PATH, META_KEY, meta_props, PROP_PATH, prop_props,
-                list_index, deconstructed
-                )
-            return
-
-        def _set_child_rocrate_metadata(
-            parent, META_PATH, META_KEY, meta_props, PROP_PATH, prop_props, list_index, deconstructed
-        ):
-            if len(prop_props) == 0:
-                raise Exception("prop_props is empty")
-
-            prop = prop_props[0]
-            index = list_index[0] if list_index else None
-            at_type = gen_type(META_PATH)
-
-            # dict
-            if index is None:
-                if len(prop_props) == 1:
-                    if prop == "@id":
-                        pass
-                    else:
-                        parent[prop] = deconstructed[META_KEY]
-                        rocrate.add(parent)
-                else:
-                    if "@id" in prop_props:
-                        at_id = deconstructed[META_KEY]
-                        add_entity(parent, prop, at_id, at_type)
-                    else:
-                        if prop not in parent:
-                            add_entity(
-                                parent, prop, gen_id(meta_props[0]), at_type
-                            )
-                        _set_child_rocrate_metadata(
-                            parent[prop], META_PATH, META_KEY, meta_props[1:],
-                            PROP_PATH, prop_props[1:], list_index[1:],
-                            deconstructed
-                        )
-            # list
-            else:
-                if len(prop_props) == 1:
-                    if prop not in parent:
-                        list_val = ["" for _ in range(index + 1)]
-                    else:
-                        list_val = parent[prop]
-                    if len(list_val) <= index:
-                        list_val.extend(
-                            ["" for _ in range(index - len(list_val) + 1)]
-                        )
-                    list_val[index] = deconstructed[META_KEY]
-                    parent[prop] = list_val
-                    rocrate.add(parent)
-                else:
-                    ensure_entity_list_size(parent, prop, at_type, index + 1)
-                    if isinstance(parent[prop], list):
-                        _set_child_rocrate_metadata(
-                            parent[prop][index], META_PATH, META_KEY,
-                            meta_props[1:], PROP_PATH, prop_props[1:],
-                            list_index[1:], deconstructed
-                        )
-                    else:
-                        raise Exception(
-                            f"Unexpected structure for prop {prop} at index {index}"
-                        )
-            return
+        import itertools
+        id_template = "_:{s}_{i}"
+        _sequential = (id_template.format(i=i, s="{s}") for i in itertools.count())
+        gen_id = lambda key: next(_sequential).format(s=key)
 
         deconstructed = self._deconstruct_dict(metadata)
-
+        # TODO: implement mapping to RO-Crate format
         for record_key in deconstructed:
+            META_PATH = re.sub(r"\[\d+\]", "", record_key)
             if "attribute_value" not in record_key:
                 continue
+            META_KEY = record_key.replace(".attribute_value_mlt", "").replace(".attribute_value", "")
 
-            META_PATH = re.sub(r"\[\d+\]", "", record_key)
-            META_KEY = record_key.replace(
-                ".attribute_value_mlt", "").replace(".attribute_value", "")
             meta_props = META_KEY.split(".")
-            PROP_PATH = properties_mapping[META_PATH] # attribute_value
-            prop_props = PROP_PATH.split(".")
+            # PROP_PATH = properties_mapping[META_PATH] # attribute_value
+            # prop_props = PROP_PATH.split(".")
             print(f"--- {META_KEY}: {deconstructed[record_key]}, {gen_id(meta_props[0])} ---")
+            pass
 
-            _set_rocrate_metadata(
-                rocrate.root_dataset, META_PATH, META_KEY, meta_props,
-                PROP_PATH, prop_props, deconstructed
-            )
-
-        # Extra
-        extra_field = deconstructed.get(item_map["Extra"], None)
-        if extra_field:
-            if isinstance(extra_field, dict):
-                str_extra_dict = extra_field.get("subitem_text_value")
-            else:
-                str_extra_dict = extra_field[0].get("subitem_text_value")
-            extra_entity = {
-                "description": "Metadata which is not able to be mapped",
-                "value": str_extra_dict
-            }
-            add_entity(
-                rocrate.root_dataset, "additionalProperty", gen_id("extra"),
-                "PropertyValue", extra_entity
-            )
-
+        rocrate.root_dataset["wk:index"] = metadata.get("path", [])
         return rocrate

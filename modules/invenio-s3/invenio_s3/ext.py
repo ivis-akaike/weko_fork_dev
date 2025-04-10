@@ -28,6 +28,7 @@ class InvenioS3(object):
 
     @cached_property
     def init_s3fs_info(self, location):
+
         """Gather all the information needed to start the S3FSFileSystem."""
         if 'S3_ACCCESS_KEY_ID' in current_app.config:
             current_app.config['S3_ACCESS_KEY_ID'] = current_app.config[

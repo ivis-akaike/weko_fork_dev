@@ -7,33 +7,25 @@
 
 """Module of weko-swordserver."""
 
-import os
-import tempfile
+
 import traceback
-from copy import deepcopy
-from datetime import datetime, timezone
-from dateutil import parser
 from hashlib import sha256
 from zipfile import ZipFile
 
-from flask import current_app, request
+from flask import current_app
 from sqlalchemy.exc import SQLAlchemyError
 
 from invenio_accounts.models import User
 from invenio_oauth2server.models import Token
-from invenio_pidstore.models import PersistentIdentifier
 from weko_accounts.models import ShibbolethUser
 from weko_admin.models import AdminSettings
-from weko_records.api import ItemTypes, ItemsMetadata
 from weko_search_ui.config import SWORD_METADATA_FILE, ROCRATE_METADATA_FILE
 from weko_search_ui.utils import (
     check_tsv_import_items,
     check_xml_import_items,
     check_jsonld_import_items
 )
-from weko_workflow.api import WorkActivity, WorkFlow as WorkFlows
-from weko_workflow.errors import WekoWorkflowException
-from weko_workflow.headless import HeadlessActivity
+from weko_workflow.api import WorkFlow as WorkFlows
 from weko_workflow.models import  WorkFlow
 
 from .api import SwordClient
@@ -62,29 +54,20 @@ def check_import_file_format(file, packaging):
     """
     with ZipFile(file, "r") as zip_ref:
         file_list =  zip_ref.namelist()
-
     if "SWORDBagIt" in packaging:
-        if "metadata/sword.json" in file_list:
+        if SWORD_METADATA_FILE in file_list:
             file_format = "JSON"
         else:
             current_app.logger.error(
-                "SWORDBagIt requires metadate/sword.json."
+                "metadate/sword.json is not found in SWORDBagIt."
             )
             raise WekoSwordserverException(
                 "SWORDBagIt requires metadate/sword.json.",
                 ErrorType.MetadataFormatNotAcceptable
                 )
     elif "SimpleZip" in packaging:
-        if "ro-crate-metadata.json" in file_list:
+        if ROCRATE_METADATA_FILE in file_list:
             file_format = "JSON"
-        elif SWORD_METADATA_FILE in file_list:
-            current_app.logger.error(
-                "packaging format is SimpleZip, but sword.json is found."
-            )
-            raise WekoSwordserverException(
-                "packaging format is SimpleZip, but sword.json is found.",
-                ErrorType.MetadataFormatNotAcceptable
-                )
         elif any(ROCRATE_METADATA_FILE.split("/")[1] in filename
                 for filename in file_list
             ):
@@ -101,7 +84,13 @@ def check_import_file_format(file, packaging):
             ):
             file_format = "TSV/CSV"
         else:
-            file_format = "OTHERS"
+            current_app.logger.error(
+                "ro-crate-metadata.json or other metadata file is not found."
+            )
+            raise WekoSwordserverException(
+                "SimpleZip requires ro-crate-metadata.json or other metadata file.",
+                ErrorType.MetadataFormatNotAcceptable
+                )
     else:
         current_app.logger.error(
             f"Not accept packaging format: {packaging}"
@@ -110,24 +99,19 @@ def check_import_file_format(file, packaging):
             f"Not accept packaging format: {packaging}",
             ErrorType.PackagingFormatNotAcceptable
             )
-
     return file_format
 
 
-def unpack_zip(file):
-    """Unpack zip file.
+def get_shared_id_from_on_behalf_of(on_behalf_of):
+    """Get shared ID from on-behalf-of.
 
-    Unpack zip file and return extracted files information.
+    Get shared ID from on-behalf-of.
+    If on-behalf-of is not shared ID, return None.
 
     Args:
         on_behalf_of (str): On-behalf-of in request
-
     Returns:
-        int: Shared user ID
-
-    Raises:
-        WekoSwordserverException:
-            If an error occurs while searching user by On-Behalf-Of.
+        int: Shared ID
     """
     shared_id = -1
     if on_behalf_of is None:
@@ -186,13 +170,16 @@ def is_valid_file_hash(expected_hash, file):
     return expected_hash == body_hash
 
 
-def get_record_by_client_id(client_id):
-    """
-    Get the SwordClient and SwordItemTypeMapping records associated with client ID.
+def check_import_items(file, file_format, is_change_identifier=False, **kwargs):
+    """Check metadata file for import.
+
+    Check the contents of the file and return the result of the check.
 
     Args:
-        client_id (str): The ID of the client to get the settings records for.
-
+        file (FileStorage): File object.
+        file_format (str): File format. "TSV/CSV", "XML" or "JSON-LD".
+        is_change_identifier (bool, optional):
+            Change Identifier Mode. Defaults to False.
     Returns:
         dict: Result of the check.
     """
@@ -240,12 +227,6 @@ def get_record_by_client_id(client_id):
         shared_id = kwargs.get("shared_id", -1)
 
         sword_client = SwordClient.get_client_by_id(client_id)
-        if sword_client is None:
-            current_app.logger.error(f"No setting foound for client ID: {client_id}")
-            raise WekoSwordserverException(
-                "No setting found for client ID that you are using.",
-                errorType=ErrorType.ServerError
-            )
         mapping_id = sword_client.mapping_id
         # Check workflow and item type
         register_type = sword_client.registration_type
@@ -265,12 +246,6 @@ def get_record_by_client_id(client_id):
 
         if register_type == "Workflow":
             workflow = WorkFlows().get_workflow_by_id(sword_client.workflow_id)
-            if workflow is None or workflow.is_deleted:
-                current_app.logger.error(f"Workflow not found for client ID: {client_id}")
-                raise WekoSwordserverException(
-                    "Workflow not found for registration your item.",
-                    errorType=ErrorType.ServerError
-                )
             item_type_id = check_result.get("item_type_id")
             # Check if workflow and item type match
             if workflow.itemtype_id != item_type_id:
@@ -279,15 +254,12 @@ def get_record_by_client_id(client_id):
                     f"ItemType ID must be {item_type_id}, "
                     f"but the workflow's ItemType ID was {workflow.itemtype_id}.")
                 raise WekoSwordserverException(
-                    "Invalid json-ld format.",
-                    ErrorType.MetadataFormatNotAcceptable
+                    "Item type and workflow do not match.",
+                    errorType=ErrorType.ServerError
                 )
-        json["@graph"] = new_value
-    # TODO: support SWORD json-ld format
     else:
-        current_app.logger.error("Invalid json-ld format.")
         raise WekoSwordserverException(
-            "Invalid json-ld format.",
+            f"Unsupported file format: {file_format}",
             ErrorType.MetadataFormatNotAcceptable
         )
 
@@ -313,24 +285,35 @@ def update_item_ids(list_record, new_id):
     Raises:
         ValueError: If list_record is not a list.
     """
+    if not isinstance(list_record, list):
+        raise ValueError("list_record must be a list.")
+
     # Create a dictionary to map identifiers to their respective items
     identifier_to_item = {}
     for item in list_record:
         if not isinstance(item, dict):
             continue
 
-        metadata = item.get("metadata")
-        if not metadata or not item.get("_id"):
-            continue  # Skip if metadata is missing or doesn't have "_id"
+        metadata = item.get('metadata')
+        if not metadata or not hasattr(metadata, 'id'):
+            continue  # Skip if metadata is missing or doesn't have 'id'
 
-        identifier_to_item[item["_id"]] = item
+        current_identifier = getattr(metadata, 'id')
+        if current_identifier is not None:  # Skip if identifier is empty
+            identifier_to_item[current_identifier] = item
 
     # Iterate through each ITEM in list_record
     for item in list_record:
-        metadata = item.get("metadata")
-        if not metadata or not item.get("link_data"):
-            continue  # Skip if metadata is missing or doesn't have "link_data"
-        link_data = item.get("link_data")
+        if not isinstance(item, dict):
+            continue
+
+        metadata = item.get('metadata')
+        if not metadata or not hasattr(metadata, 'link_data'):
+            continue  # Skip if metadata is missing or doesn't have 'link_data'
+
+        link_data = getattr(metadata, 'link_data', [])
+        if not isinstance(link_data, list):
+            continue
 
         for link_item in link_data:
             if not isinstance(link_item, dict):
@@ -347,79 +330,3 @@ def update_item_ids(list_record, new_id):
                 )
 
     return list_record
-
-
-def delete_items_with_activity(item_id, request_info):
-    """Delete items with activity.
-
-    Args:
-        item_id (str): Item ID.
-        request_info (dict): Request information.
-
-    Returns:
-        str: URL for deletion.
-
-    Raises:
-        WekoWorkflowException: If any error occurs during deletion.
-    """
-    user_id=request_info.get("user_id")
-    community_id=request_info.get("community_id")
-
-    try:
-        headless = HeadlessActivity()
-        url = headless.init_activity(
-            user_id=user_id, community_id=community_id,
-            item_id=item_id, for_delete=True
-        )
-    except WekoWorkflowException as ex:
-        traceback.print_exc()
-        raise
-
-    return url
-
-
-def get_deletion_type(client_id):
-    """Get deletion type.
-
-    Get deletion type for item deletion from client_id.
-
-    Args:
-        client_id (str): Client ID.
-
-    Returns:
-        dict: A dictionary containing register_format, workflow_id, and item_type_id.
-
-    Raises:
-        WekoSwordserverException: If any validation fails.
-    """
-    client_id = request.oauth.client.client_id
-    sword_client = SwordClient.get_client_by_id(client_id)
-    if sword_client is None:
-        current_app.logger.error(f"No setting found for client ID: {client_id}")
-        raise WekoSwordserverException(
-            "No setting found for client ID that you are using.",
-            errorType=ErrorType.ServerError
-        )
-
-    register_type = sword_client.registration_type
-    deletion_type = "Direct"
-    workflow = None
-    delete_flow_id = None
-    if register_type == "Workflow":
-        workflow = WorkFlows().get_workflow_by_id(sword_client.workflow_id)
-        if workflow is None or workflow.is_deleted:
-            current_app.logger.error(f"Workflow not found for sword client.")
-            raise WekoSwordserverException(
-                "Workflow not found for registration your item.",
-                errorType=ErrorType.ServerError
-            )
-
-        # Check if workflow has delete_flow_id
-        delete_flow_id = workflow.delete_flow_id
-        deletion_type = "Workflow" if delete_flow_id else "Direct"
-
-    return {
-        "deletion_type": deletion_type,
-        "workflow_id": sword_client.workflow_id,
-        "delete_flow_id": delete_flow_id,
-    }

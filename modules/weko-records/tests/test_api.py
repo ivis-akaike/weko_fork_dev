@@ -39,8 +39,8 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from weko_records.api import FeedbackMailList, RequestMailList, FilesMetadata, ItemLink, \
     ItemsMetadata, ItemTypeEditHistory, ItemTypeNames, ItemTypeProps, \
-    ItemTypes, Mapping, SiteLicense, RecordBase, WekoRecord
-from weko_records.models import ItemType, ItemTypeName, \
+    ItemTypes, Mapping, JsonldMapping, SiteLicense, RecordBase, WekoRecord
+from weko_records.models import ItemType, ItemTypeJsonldMapping, ItemTypeName, \
     SiteLicenseInfo, SiteLicenseIpAddress
 from jsonschema.validators import Draft4Validator
 from datetime import datetime
@@ -2311,76 +2311,6 @@ def test_item_link_bulk_delete(app, db, records):
     assert r[0]['item_links']=='3'
     assert r[0]['item_title']==records[2][1]['item_title']
     assert r[0]['value']=='HDL'
-
-
-# class ItemLink(object):
-#     def bulk_delete_supplement(self, dst_item_ids):
-# .tox/c1/bin/pytest --cov=weko_records tests/test_api.py::test_bulk_delete_supplement -v -s -vv --cov-branch --cov-report=term --cov-config=tox.ini --basetemp=/code/modules/weko-records/.tox/c1/tmp
-def test_bulk_delete_supplement(app, db, records):
-    """
-    bulk_delete_supplement メソッドの動作をテストする。
-    各ケースで期待される動作を確認する。
-    """
-    org_item_id = "999"
-
-    # テストケース 1: dst_item_ids に1つのアイテムIDが含まれている場合
-    dst_item_id_single = "1"
-
-    # ItemReference テーブルにテストデータを追加
-    db.session.add(ItemReference(
-        src_item_pid=dst_item_id_single,
-        dst_item_pid=org_item_id,
-        reference_type="isSupplementTo"
-    ))
-    db.session.add(ItemReference(
-        src_item_pid=org_item_id,
-        dst_item_pid=dst_item_id_single,
-        reference_type="isSupplementedBy"
-    ))
-    db.session.commit()
-
-    # bulk_delete_supplement を実行
-    instance = ItemLink(recid=org_item_id)
-    instance.bulk_delete_supplement([dst_item_id_single])
-
-    # データベースの状態を確認
-    deleted_items = db.session.query(ItemReference).filter(
-        ItemReference.src_item_pid == dst_item_id_single,
-        ItemReference.dst_item_pid == org_item_id,
-        ItemReference.reference_type.in_(["isSupplementTo", "isSupplementedBy"])
-    ).all()
-
-    assert len(deleted_items) == 0  # 該当するレコードが削除されていることを確認
-
-    # テストケース 2: dst_item_ids に複数のアイテムIDが含まれている場合
-    dst_item_ids_multiple = ["2", "3", "4"]
-
-    # ItemReference テーブルにテストデータを追加
-    for dst_item_id in dst_item_ids_multiple:
-        db.session.add(ItemReference(
-            src_item_pid=dst_item_id,
-            dst_item_pid=org_item_id,
-            reference_type="isSupplementTo"
-        ))
-        db.session.add(ItemReference(
-            src_item_pid=org_item_id,
-            dst_item_pid=dst_item_id,
-            reference_type="isSupplementedBy"
-        ))
-    db.session.commit()
-
-    # bulk_delete_supplement を実行
-    instance.bulk_delete_supplement(dst_item_ids_multiple)
-
-    # データベースの状態を確認
-    for dst_item_id in dst_item_ids_multiple:
-        deleted_items = db.session.query(ItemReference).filter(
-            ItemReference.src_item_pid == dst_item_id,
-            ItemReference.dst_item_pid == org_item_id,
-            ItemReference.reference_type.in_(["isSupplementTo", "isSupplementedBy"])
-        ).all()
-
-        assert len(deleted_items) == 0  # 該当するレコードが削除されていることを確認
 
 
 # class JsonldMapping:
