@@ -11,14 +11,14 @@ import hashlib
 import os
 import shutil
 import tempfile
-
+import copy
 import boto3
 import pytest
+
 from flask import Flask, current_app
 from invenio_app.factory import create_api
 from invenio_db import InvenioDB
 from invenio_db import db as db_
-from invenio_db.utils import drop_alembic_version_table
 from invenio_files_rest import InvenioFilesREST
 from invenio_files_rest.models import Location
 from moto import mock_s3
@@ -33,7 +33,7 @@ def app_config(app_config):
     app_config[
         'FILES_REST_STORAGE_FACTORY'] = 'invenio_s3.s3fs_storage_factory'
     app_config['S3_ENDPOINT_URL'] = None
-    
+
     app_config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI',
                                            'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest')
     app_config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
@@ -62,7 +62,7 @@ def create_app():
 def base_app():
     """Flask application fixture."""
     app = Flask('testapp')
-    
+
     app.config.update(
     FILES_REST_STORAGE_FACTORY='invenio_s3:s3_storage_factory',
     S3_ENDPOINT_URL=None,
@@ -179,3 +179,11 @@ def get_md5():
         return "md5:{0}".format(m.hexdigest()) if prefix else m.hexdigest()
 
     return inner
+
+@pytest.fixture(scope='module')
+def celery_config():
+    """Override pytest-invenio fixture.
+
+    TODO: Remove this fixture if you add Celery support.
+    """
+    return {}

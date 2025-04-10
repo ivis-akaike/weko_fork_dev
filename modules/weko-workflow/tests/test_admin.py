@@ -69,6 +69,26 @@ class TestFlowSettingView:
             assert res.status_code == status_code
 
     # def flow_detail(self, flow_id='0'):
+    # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestFlowSettingView::test_flow_detail_return_repositories -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+    def test_flow_detail_return_repositories(self,client,workflow,users):
+        flow_define = workflow['flow']
+        url = '/admin/flowsetting/{}'.format(flow_define.flow_id)
+        login(client=client, email=users[2]['email'])
+        with patch("flask.templating._render", return_value="") as mock_render:
+            res =  client.get(url)
+            assert res.status_code == 200
+            args, kwargs = mock_render.call_args
+            assert len(args[1]["repositories"]) == 2
+
+        url = '/admin/flowsetting/{}'.format(0)
+        login(client=client, email=users[3]['email'])
+        with patch("flask.templating._render", return_value="") as mock_render:
+            res =  client.get(url)
+            assert res.status_code == 200
+            args, kwargs = mock_render.call_args
+            assert len(args[1]["repositories"]) == 1
+
+    # def flow_detail(self, flow_id='0'):
     # def new_flow(self, flow_id='0'):
     # def del_flow(self, flow_id='0'):
     # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestFlowSettingView::test_flow_detail_update_delete -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
@@ -107,6 +127,7 @@ class TestFlowSettingView:
         url = '/admin/flowsetting/{}'.format(0)
         q = FlowDefine.query.all()
         assert len(q) == 0
+
         with patch("flask.templating._render", return_value=""):
             res =  client.post(url)
             assert res.status_code == 500
@@ -122,7 +143,7 @@ class TestFlowSettingView:
         q = FlowDefine.query.all()
         assert len(q) == 0
 
-        data = {"flow_name": "test1"}
+        data = {"flow_name": "test1", "repository_id": "Root Index"}
         login(client=client, email=users[1]['email'])
         url = '/admin/flowsetting/{}'.format(0)
         with patch("flask.templating._render", return_value=""):
@@ -131,7 +152,7 @@ class TestFlowSettingView:
         q = FlowDefine.query.all()
         assert len(q) == 1
 
-        data = {"flow_name": "test1"}
+        data = {"flow_name": "test1", "repository_id": "Root Index"}
         login(client=client, email=users[1]['email'])
         url = '/admin/flowsetting/{}'.format(0)
         with patch("flask.templating._render", return_value=""):
@@ -141,7 +162,7 @@ class TestFlowSettingView:
         assert len(q) == 1
 
         flow_id = q[0].flow_id
-        data = {"flow_name": "test2"}
+        data = {"flow_name": "test2", "repository_id": "Root Index"}
         login(client=client, email=users[1]['email'])
         url = '/admin/flowsetting/{}'.format(flow_id)
         with patch("flask.templating._render", return_value=""):
@@ -159,7 +180,7 @@ class TestFlowSettingView:
         q = FlowDefine.query.first()
         assert q.flow_name == 'test2'
 
-        data = {"flow_name": "test1"}
+        data = {"flow_name": "test1", "repository_id": "Root Index"}
         login(client=client, email=users[1]['email'])
         url = '/admin/flowsetting/{}'.format(0)
         with patch("flask.templating._render", return_value=""):
@@ -168,7 +189,7 @@ class TestFlowSettingView:
         q = FlowDefine.query.all()
         assert len(q) == 2
 
-        data = {"flow_name": "test1"}
+        data = {"flow_name": "test1", "repository_id": "Root Index"}
         login(client=client, email=users[1]['email'])
         url = '/admin/flowsetting/{}'.format(flow_id)
         with patch("flask.templating._render", return_value=""):
@@ -304,7 +325,7 @@ class TestWorkFlowSettingView:
         (0, 403),
         (1, 200),
         (2, 200),
-        (3, 403),
+        (3, 200),
         (4, 403),
         (5, 403),
         (6, 200),
@@ -363,6 +384,21 @@ class TestWorkFlowSettingView:
             res =  client.get(url)
             assert res.status_code == status_code
 
+    # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestWorkFlowSettingView::test_workflow_detail_return_repositories -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+    def test_workflow_detail_return_repositories(self,app ,client, users, workflow, mocker):
+        login(client=client, email=users[2]['email'])
+        url = url_for('workflowsetting.workflow_detail',workflow_id='0')
+        mock_render =mocker.patch("flask.templating._render", return_value=make_response())
+        res =  client.get(url)
+        args, kwargs = mock_render.call_args
+        assert len(args[1]["repositories"]) == 2
+
+        login(client=client, email=users[3]['email'])
+        url = url_for('workflowsetting.workflow_detail',workflow_id='0')
+        mock_render =mocker.patch("flask.templating._render", return_value=make_response())
+        res =  client.get(url)
+        args, kwargs = mock_render.call_args
+        assert len(args[1]["repositories"]) == 1
 
 
     #     def update_workflow(self, workflow_id='0'):
@@ -626,3 +662,83 @@ class TestActivitySettingsView:
 
 
 
+
+# class WorkSpaceWorkFlowSettingView(BaseView):
+# .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestWorkSpaceWorkFlowSettingView -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+class TestWorkSpaceWorkFlowSettingView:
+    #   def index(self):
+    # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestWorkSpaceWorkFlowSettingView::test_index_acl_guest -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+    def test_index_acl_guest(self,client,db_register2):
+        url = url_for('workspaceworkflowsetting.index',_external=True)
+        res =  client.get(url)
+        assert res.status_code == 302
+
+    # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestWorkSpaceWorkFlowSettingView::test_index_acl -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+    @pytest.mark.parametrize('users_index, status_code', [
+        (0, 403),
+        (1, 200),
+        (2, 200),
+        (3, 403),
+        (4, 403),
+        (5, 403),
+        (6, 200),
+    ])
+    def test_index_acl(self,client,db_register2,users,users_index,status_code):
+        login(client=client, email=users[users_index]['email'])
+        url = url_for('workspaceworkflowsetting.index',_external=True)
+        res =  client.get(url)
+        assert res.status_code == status_code
+
+    # .tox/c1/bin/pytest --cov=weko_workflow tests/test_admin.py::TestWorkSpaceWorkFlowSettingView::test_index -vv -s --cov-branch --cov-report=term --basetemp=/code/modules/weko-workflow/.tox/c1/tmp
+    def test_index(self,client,db,admin_settings,app,users,db_register2,mocker):
+        from invenio_accounts.testutils import login_user_via_session
+        from flask_wtf import FlaskForm,Form
+        login_user_via_session(client,email=users[2]["email"])
+        url = url_for('workspaceworkflowsetting.index')
+        res =  client.get(url)
+        assert res.status_code == 200
+
+        from flask_wtf import FlaskForm,Form
+        data = {"workFlow_select_flg":"1"}
+        from flask import current_app
+        login(client=client, email=users[2]['email'])
+        url = url_for('workspaceworkflowsetting.index')
+        app.config['WTF_CSRF_ENABLED'] = False
+        csrf_token = client.get(url).data.decode('utf-8')
+        data = {
+            'csrf_token': csrf_token,
+        }
+        res = client.post(url,data=json.dumps(data),headers={"content-type": "application/json"})
+        assert res.status_code == 200
+
+        data = {
+            "workFlow_select_flg":"1",
+            "submit":"set_workspace_workflow_setting_form"
+        
+        }
+        mock_render = mocker.patch("weko_workflow.admin.WorkSpaceWorkFlowSettingView.render",return_value=make_response())
+        from flask import abort, current_app, jsonify, flash, request
+        res = client.post(url,data=data)
+        assert res.status_code == 200
+
+        data = {
+            "registrationRadio":"1",
+            "submit":"set_workspace_workflow_setting_form"
+        
+        }
+        mock_render = mocker.patch("weko_workflow.admin.WorkSpaceWorkFlowSettingView.render",return_value=make_response())
+        from flask import abort, current_app, jsonify, flash, request
+        res = client.post(url,data=data)
+        assert res.status_code == 200
+
+        data = {
+            "registrationRadio":"1",
+            "submit":"set_workspace_workflow_setting_form"
+        
+        }
+        mock_render = mocker.patch("weko_workflow.admin.WorkSpaceWorkFlowSettingView.render",return_value=make_response())
+        from flask import abort, current_app, jsonify, flash, request
+        with patch('weko_records_ui.admin.db.session.commit') as m:
+            m.side_effect = Exception('')
+            res = client.post(url,data=data)
+            assert res.status_code == 400

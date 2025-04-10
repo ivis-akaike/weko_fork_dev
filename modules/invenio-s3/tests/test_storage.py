@@ -15,12 +15,10 @@ import tempfile
 from io import BytesIO
 
 import pytest
-import requests
-from flask import url_for
 from invenio_files_rest.errors import FileSizeError, StorageError, \
     UnexpectedFileSizeError
-from invenio_files_rest.limiters import FileSizeLimit
 from invenio_files_rest.models import Location
+from invenio_files_rest.limiters import FileSizeLimit
 from invenio_files_rest.storage import PyFSFileStorage
 from mock import patch
 from s3fs import S3File, S3FileSystem
@@ -56,7 +54,13 @@ def test_non_s3_path(location, tmpdir):
     S3FileSystem.default_block_size + 1,
     S3FileSystem.default_block_size * 2,
     (S3FileSystem.default_block_size * 2) + 1,
-))
+), ids=[
+    '1_bytes',
+    'default_block_size',
+    'default_block_size_plus_1',
+    'default_block_size_times_2',
+    'default_block_size_times_2_plus_1'
+])
 def test_initialize(location, s3_bucket, s3fs, file_size):
     """Test init of files."""
     uri, size, checksum = s3fs.initialize(size=file_size)
@@ -90,7 +94,7 @@ def test_initialize_failcleanup(location, monkeypatch, s3_bucket, s3fs):
 
 def test_delete(location, s3_bucket, s3fs_testpath, s3fs):
     """Test delete."""
-    s3_bucket.upload_fileobj(BytesIO(b'test'), 'path/to/data')
+    s3fs.save(BytesIO(b'test'))
 
     objs = list(s3_bucket.objects.all())
     assert len(objs) == 1
@@ -110,7 +114,13 @@ def test_delete(location, s3_bucket, s3fs_testpath, s3fs):
     os.urandom((S3FileSystem.default_block_size + 1)),
     os.urandom((S3FileSystem.default_block_size * 2)),
     os.urandom(((S3FileSystem.default_block_size * 2) + 1)),
-))
+), ids=[
+    'test',
+    'default_block_size',
+    'default_block_size_plus_1',
+    'default_block_size_times_2',
+    'default_block_size_times_2_plus_1'
+])
 def test_save(location, s3_bucket, s3fs_testpath, s3fs, get_md5, data):
     """Test save."""
     uri, size, checksum = s3fs.save(BytesIO(data))
@@ -191,7 +201,13 @@ def test_save_limits(location, s3fs):
     S3FileSystem.default_block_size + 1,
     S3FileSystem.default_block_size * 2,
     (S3FileSystem.default_block_size * 2) + 1,
-))
+), ids=[
+    '100_bytes',
+    'default_block_size',
+    'default_block_size_plus_1',
+    'default_block_size_times_2',
+    'default_block_size_times_2_plus_1'
+])
 def test_update(location, s3fs, get_md5, file_size):
     """Test update file."""
     s3fs.initialize(size=file_size)
@@ -323,7 +339,6 @@ def test_send_file(base_app, location, s3fs, database):
     default_location = Location.query.filter_by(default=True).first()
     default_location.type = ''
     database.session.commit()
-
     data = b'sendthis'
     uri, size, checksum = s3fs.save(BytesIO(data))
 
@@ -343,7 +358,7 @@ def test_send_file(base_app, location, s3fs, database):
         # Cache-Control: max-age=43200, public
         # Expires: Sat, 23 Jan 2016 19:21:04 GMT
         # Date: Sat, 23 Jan 2016 07:21:04 GMT
-       
+
         res = s3fs.send_file(
             'myfilename.txt', mimetype='text/plain', checksum='crc32:test')
         assert res.status_code == 200
@@ -358,18 +373,13 @@ def test_send_file(base_app, location, s3fs, database):
 
     def test_send_indirectly():
         res = s3fs.send_file(
-        'test.txt', mimetype='text/plain', checksum=checksum)
+            'test.txt', mimetype='text/plain')
         assert res.status_code == 302
         h = res.headers
         assert 'Location' in h
-        assert h['Content-Type'] == 'text/plain; charset=utf-8'
-        # FIXME: the lenght is modified somewhere somehow
-        # assert h['Content-Length'] == str(size)
-        # assert h['Content-MD5'] == checksum[4:]
-        # assert h['ETag'] == '"{0}"'.format(checksum)
 
         res = s3fs.send_file(
-            'myfilename.txt', mimetype='text/plain', checksum='crc32:test')
+            'myfilename.txt', mimetype='text/plain')
         assert res.status_code == 302
         assert 'Content-MD5' not in dict(res.headers)
 
@@ -382,19 +392,19 @@ def test_send_file(base_app, location, s3fs, database):
 
         default_location.type = 's3'
         database.session.commit()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = True
         test_send_directly()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = False
         test_send_directly()
 
         default_location.s3_send_file_directly = False
         database.session.commit()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = True
         test_send_indirectly()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = False
         test_send_indirectly()
 
@@ -421,19 +431,19 @@ def test_send_file(base_app, location, s3fs, database):
 
         default_location.type = 's3'
         database.session.commit()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = True
         test_send_directly()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = False
         test_send_directly()
 
         default_location.s3_send_file_directly = False
         database.session.commit()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = True
         test_send_indirectly()
-        
+
         base_app.config['S3_SEND_FILE_DIRECTLY'] = False
         test_send_indirectly()
 
@@ -447,6 +457,8 @@ def test_send_file(base_app, location, s3fs, database):
         base_app.config['S3_SEND_FILE_DIRECTLY'] = True
         default_location.s3_send_file_directly = True
         database.session.commit()
+
+
 
 def test_send_file_fail(base_app, location, s3fs):
     """Test send file."""

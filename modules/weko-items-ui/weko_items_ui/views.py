@@ -26,6 +26,7 @@ import sys
 import traceback
 from copy import deepcopy
 from datetime import date, datetime, timedelta
+import requests
 
 import redis
 from redis import sentinel
@@ -52,9 +53,10 @@ from weko_index_tree.utils import check_index_permissions, get_index_id, \
 from weko_records.api import ItemTypes
 from weko_records_ui.ipaddr import check_site_license_permission
 from weko_records_ui.permissions import check_file_download_permission
-from weko_records_ui.views import soft_delete
+# from weko_records_ui.views import soft_delete
 from weko_redis.redis import RedisConnection
 from weko_workflow.api import GetCommunity, WorkActivity, WorkFlow as WorkFlows
+from .utils import is_duplicate_record
 from weko_workflow.utils import check_an_item_is_locked, \
     get_record_by_root_ver, get_thumbnails, prepare_edit_workflow, \
     set_files_display_type, prepare_delete_workflow
@@ -75,7 +77,7 @@ from .utils import _get_max_export_items, check_item_is_being_edit, \
     translate_validation_message, update_index_tree_for_record, \
     update_json_schema_by_activity_id, update_schema_form_by_activity_id, \
     update_sub_items_by_user_role, validate_form_input_data, validate_user, \
-    validate_user_mail_and_index
+    validate_user_mail_and_index, get_weko_link, get_access_token
 from .config import WEKO_ITEMS_UI_FORM_TEMPLATE,WEKO_ITEMS_UI_ERROR_TEMPLATE
 from weko_theme.config import WEKO_THEME_DEFAULT_COMMUNITY
 
@@ -96,6 +98,63 @@ blueprint_api = Blueprint(
     static_folder='static',
     url_prefix="/items",
 )
+
+#  OAポリシー取得エンドポイント
+@blueprint.route("/api/oa_policies", methods=["GET"])
+@login_required
+def get_oa_policy():
+    """
+    OAポリシー情報を取得するAPIエンドポイント。
+
+    リクエストパラメータ:
+        - issn (str): ISSN番号
+        - eissn (str): eISSN番号
+        - title (str): 雑誌名
+
+    レスポンス:
+        - 成功時: {"policy_url": "取得したポリシーURL"}
+        - 失敗時: {"error": "エラーメッセージ"}, HTTPステータスコード
+    """
+    try:
+        issn = request.args.get("issn", "").strip()
+        eissn = request.args.get("eissn", "").strip()
+        title = request.args.get("title", "").strip()
+
+        if not issn and not eissn and not title:
+            return jsonify({"error": "Please enter ISSN, eISSN, or journal title"}), 400
+
+        api_url = current_app.config.get("WEKO_ITEMS_UI_OA_POLICY_API_URL")
+        api_code = current_app.config.get("WEKO_ITEMS_UI_OA_POLICY_API_CODE")
+
+        # アクセストークンを取得
+        token_info = get_access_token(api_code)
+
+        if not token_info or "access_token" not in token_info:
+            return jsonify({"error": "Authentication error occurred"}), 401
+
+        token = token_info["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"issn": issn, "eissn": eissn, "title": title}
+
+        # APIリクエスト送信
+        response = requests.get(api_url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            data = response.json()
+            return jsonify({"policy_url": data.get("url", "No Policy Information found")})
+        elif response.status_code == 404:
+            return jsonify({"error": "No matching policy"}), 404
+        elif response.status_code == 429:
+            return jsonify({"error": "Request limit exceeded"}), 429
+        elif response.status_code == 500:
+            return jsonify({"error": "Internal server error"}), 500
+        else:
+            return jsonify({"error": "An unknown error occurred"}), 500
+
+    except requests.exceptions.RequestException:
+        return jsonify({"error": "API Request Failed"}), 500
+    except Exception as e:
+        return jsonify({"error": f"An unknown error occurred: {str(e)}"}), 500
 
 @blueprint.route('/', methods=['GET'])
 @blueprint.route('/<int:item_type_id>', methods=['GET'])
@@ -228,28 +287,45 @@ def iframe_save_model():
     """
     try:
         data = request.get_json()
-        # remove either check temp data
+
+        if not data:
+            return jsonify(code=1, msg="リクエストデータがありません"), 400
+
+        is_duplicate, recid_list, recid_links = is_duplicate_record(data)
+        if is_duplicate:
+            return jsonify({
+                "code": 1,
+                "msg": _('The same item may have been registered.'),
+                "recid_list": recid_list,
+                "duplicate_links": recid_links,
+                "is_duplicate": is_duplicate,
+            })
+
         if data and data.get('metainfo'):
             metainfo = deepcopy(data.get('metainfo'))
-            for key in metainfo.keys():
+            for key in list(metainfo.keys()):
                 if key.startswith('either_valid_'):
                     del data['metainfo'][key]
 
-        # activity_session = session['activity_info']
-        activity_session = session.get('activity_info',{})
+        # セッション取得
+        activity_session = session.get('activity_info', {})
         activity_id = activity_session.get('activity_id', None)
         if activity_id:
             sanitize_input_data(data)
             save_title(activity_id, data)
+            # メタデータからweko_linkを作成します。
+            weko_link = get_weko_link(data)
+            data["weko_link"] = weko_link
             activity = WorkActivity()
             activity.upt_activity_metadata(activity_id, json.dumps(data))
             db.session.commit()
     except Exception as ex:
         db.session.rollback()
         current_app.logger.exception("{}".format(ex))
-        return jsonify(code=1, msg='Model save error')
-    return jsonify(code=0, msg='Model save success at {} (utc)'.format(
-        datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')))
+        return jsonify(code=1, msg='Model save error'), 500  # HTTP 500 エラーを返す
+
+    return jsonify(code=0, msg='Model save success at {} (UTC)'.format(
+        datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))), 200
 
 
 @blueprint.route('/iframe/success', methods=['GET'])
@@ -311,6 +387,284 @@ def get_json_schema(item_type_id=0, activity_id=""):
         # Remove excluded item in json_schema
         remove_excluded_items_in_json_schema(item_type_id, json_schema)
         return jsonify(json_schema)
+    except BaseException:
+        current_app.logger.error(
+            'Unexpected error: {}'.format(sys.exc_info()[0]))
+    return abort(400)
+
+@blueprint.route('/schemaform_simple/<int:item_type_id>', methods=['GET'])
+@blueprint.route('/schemaform_simple/<int:item_type_id>/<string:activity_id>',
+                 methods=['GET'])
+@login_required_customize
+def get_schema_form_simple(item_type_id=0, activity_id=''):
+    """Get schema form.
+
+    :param item_type_id: Item type ID. (Default: 0)
+    :param activity_id: Activity ID.  (Default: Null)
+    :return: The json object.
+    """
+    try:
+        cur_lang = current_i18n.language
+        result = None
+        if item_type_id > 0:
+            result = ItemTypes.get_by_id(item_type_id)
+        if result is None:
+            return '["*"]'
+        schema_form = result.form
+        filemeta_form = schema_form[0]
+        if 'filemeta' == filemeta_form.get('key'):
+            group_list = Group.get_group_list()
+            filemeta_form_group = filemeta_form.get('items')[-1]
+            filemeta_form_group['type'] = 'select'
+            filemeta_form_group['titleMap'] = group_list
+
+        from .utils import recursive_form
+        recursive_form(schema_form)
+        # Check role for input(5 item type)
+        update_sub_items_by_user_role(item_type_id, schema_form)
+
+        # Hide form items
+        schema_form = hide_form_items(result, schema_form)
+
+        for elem in schema_form:
+            set_multi_language_name(elem, cur_lang)
+            if 'items' in elem:
+                items = elem['items']
+                for item in items:
+                    set_multi_language_name(item, cur_lang)
+
+        if 'default' != cur_lang:
+            for elem in schema_form:
+                translate_schema_form(elem, cur_lang)
+
+        if activity_id:
+            updated_schema_form = update_schema_form_by_activity_id(
+                schema_form,
+                activity_id)
+            if updated_schema_form:
+                schema_form = updated_schema_form
+
+        keys_to_exclude = [
+            'subitem_alternative_title',
+            'contributorType',
+            'subitem_apc',
+            'subitem_rights_language',
+            'rightHolderNames',
+            'subitem_subject_language',
+            'subitem_description_type',
+            'subitem_publisher',
+            'subitem_date_issued_datetime',
+            'subitem_rights_language',
+            'subitem_language',
+            'subitem_identifier_reg_text',
+            'subitem_temporal_text',
+            'subitem_geolocation_point',
+            'subitem_source_identifier_type',
+            'subitem_source_title',
+            'subitem_volume',
+            'subitem_issue',
+            'subitem_number_of_pages',
+            'subitem_start_page',
+            'subitem_end_page',
+            'subitem_dissertationnumber',
+            'subitem_degreename_language',
+            'subitem_dategranted',
+            'subitem_degreegrantor_identifier',
+            'subitem_heading_banner_headline',
+            'holding_agent_names',
+            'subitem_dcterms_date',
+            'jpcoar_dataset_series',
+            'publisher_names',
+            'dcterms_extent',
+            'catalog_contributors',
+            'original_language',
+            'volume_title',
+            'edition',
+            'jpcoar_format'
+        ]
+
+        schema_form = [
+            item for item in schema_form
+            if not any(
+                subitem.get('key', '').split('.')[-1] in keys_to_exclude
+                for subitem in item.get('items', [])
+            )
+        ]
+
+        for item in schema_form:
+            if "items" in item:
+                keys_to_exclude = [
+                    'bibliographicVolumeNumber',
+                    'bibliographicIssueNumber',
+                    'bibliographicPageStart',
+                    'bibliographicPageEnd',
+                    'bibliographicNumberOfPages',
+                    'bibliographicIssueDates'
+                ]
+
+                item["items"] = [
+                    i for i in item["items"]
+                    if not any(
+                        i.get('key', '').split('.')[-1] in keys_to_exclude
+                        for item["items"] in item.get('items', [])
+                    )
+                ]
+
+        schema_form = [
+            item for item in schema_form
+            if "subitem_funding_streams" not in item.get("key", "")
+        ]
+        for item in schema_form:
+            if "items" in item:
+                for i in item["items"]:
+                    if "items" in i:
+                        i["items"] = [sub_item for sub_item in i["items"] if "subitem_conference_name_language" not in sub_item.get("key", "")]
+
+        for item in schema_form:
+            if "items" in item:
+                for i in item["items"]:
+                    if "items" in i:
+                        i["items"] = [sub_item for sub_item in i["items"] if "subitem_funder_name_languag" not in sub_item.get("key", "")]
+
+                        if not i["items"]:
+                            del i["items"]
+                        for item in schema_form:
+                            if 'items' in item:
+                                for sub_item in item['items']:
+                                    if 'items' in sub_item:
+                                        for sub_sub_item in sub_item['items']:
+
+                                            if 'title_i18n' in sub_sub_item and "subitem_funder_name" in sub_sub_item.get("key", ""):
+                                                sub_sub_item['title_i18n']['ja'] = '資金名'
+                                                sub_sub_item['title'] = '資金名'
+        for item in schema_form:
+            if "items" in item:
+                for i in item["items"]:
+                    if "items" in i:
+                        i["items"] = [sub_item for sub_item in i["items"] if "bibliographic_titleLang" not in sub_item.get("key", "")]
+
+                        if not i["items"]:
+                            del i["items"]
+                        for item in schema_form:
+                            if 'items' in item:
+                                for sub_item in item['items']:
+                                    if 'items' in sub_item:
+                                        for sub_sub_item in sub_item['items']:
+
+                                            if 'title_i18n' in sub_sub_item and "bibliographic_title" in sub_sub_item.get("key", ""):
+                                                sub_sub_item['title_i18n']['ja'] = 'ジャーナル名'
+                                                sub_sub_item['title'] = 'ジャーナル名'
+        for item in schema_form:
+            if "items" in item:
+                for i in item["items"]:
+                    if "items" in i:
+                        i["items"] = [sub_item for sub_item in i["items"] if "creatorNameLang" not in sub_item.get("key", "")]
+                        i["items"] = [sub_item for sub_item in i["items"] if "creatorNameType" not in sub_item.get("key", "")]
+
+                        if not i["items"]:
+                            del i["items"]
+                        for item in schema_form:
+                            if 'items' in item:
+                                for sub_item in item['items']:
+                                    if 'items' in sub_item:
+                                        for sub_sub_item in sub_item['items']:
+
+                                            if 'title_i18n' in sub_sub_item and "creatorName" in sub_sub_item.get("key", ""):
+                                                sub_sub_item['title_i18n']['ja'] = '著作者'
+                                                sub_sub_item['title'] = '著作者'
+
+        keys_exclude = [
+            'subitem_identifier_type',
+            'subitem_funding_streams',
+            'subitem_award_numbers',
+            'subitem_conference_date',
+            'subitem_award_title',
+            'subitem_conference_sequence',
+            'subitem_conference_sponsors',
+            'subitem_conference_venues',
+            'subitem_conference_places',
+            'subitem_conference_country',
+            'creatorType'
+        ]
+
+        for item in schema_form:
+            if "items" in item:
+                item["items"] = [i for i in item["items"] if not any(exclude_key in i.get("key", "") for exclude_key in keys_exclude)]
+
+        for item in schema_form:
+            should_delete = False
+            for subitem in item.get('items', []):
+                if 'subitem_version' in subitem.get('key', '') and subitem.get('type') == 'text':
+                    should_delete = True
+                    break
+
+            if should_delete:
+                schema_form.remove(item)
+
+        key_exclude = [
+            'familyNames',
+            'givenNames',
+            'creatorAffiliations',
+            'creatorAlternatives',
+            'authorInputButton',
+            'creatorMails',
+            'nameIdentifiers',
+            'filesize',
+            'fileDate',
+            'displaytype',
+            'licensetype',
+            'accessrole',
+            'subitem_title_language',
+            'subitem_access_right_uri',
+            'resourceuri',
+            'subitem_version_resource'
+        ]
+
+        for item in schema_form:
+            if "items" in item:
+                item["items"] = [i for i in item["items"] if not any(exclude_key in i.get("key", "") for exclude_key in key_exclude)]
+
+        for item in schema_form[:]:
+
+            if item.get('key') == 'pubdate':
+                item['templateUrl'] = '/static/templates/weko_deposit/datepicker_simple.html'
+
+            if 'items' in item:
+                for subitem in item['items']:
+                    if 'key' in subitem and 'subitem_relation_type' in subitem['key']:
+                        item['items'].remove(subitem)
+                    if 'key' in subitem and 'subitem_relation_name' in subitem['key']:
+                        item['items'].remove(subitem)
+
+                        for item in item['items']:
+                            if 'items' in item:
+                                item['items'] = [subitem for subitem in item['items'] if 'subitem_relation_type_select' not in subitem['key']]
+
+            if 'items' in item:
+                for subitem in item['items']:
+                    if 'key' in subitem and 'subitem_funder_identifiers' in subitem['key']:
+                        item['items'].remove(subitem)
+                    if 'key' in subitem and 'subitem_funding_stream_identifiers' in subitem['key']:
+                        item['items'].remove(subitem)
+
+                    if 'key' in subitem and 'subitem_award_numbers' in subitem['key']:
+                        item['items'].remove(subitem)
+
+        for item in schema_form:
+            if 'items' in item:
+                for sub_item in item['items']:
+                    if 'items' in sub_item:
+                        for sub_sub_item in sub_item['items']:
+                            if ".url.url" in sub_sub_item.get("key", ""):
+                                if 'key' in sub_item and ".url" in sub_item.get("key", ""):
+                                    item['items'].remove(sub_item)
+                                    break
+
+        for item in schema_form:
+            if 'items' in item:
+                item["items"] = [sub_item for sub_item in item["items"] if not (".format" in sub_item.get("key", "")and sub_item.get('type') == "text")]
+                item["items"] = [sub_item for sub_item in item["items"] if not (".version" in sub_item.get("key", "")and sub_item.get('type') == "text")]
+        return jsonify(schema_form)
     except BaseException:
         current_app.logger.error(
             'Unexpected error: {}'.format(sys.exc_info()[0]))
@@ -1167,6 +1521,7 @@ def prepare_delete_item(id=None, community=None):
         workflows = WorkFlows()
         workflow_detail = workflows.get_workflow_by_id(post_activity['workflow_id'])
 
+        from weko_records_ui.views import soft_delete
         if workflow_detail.delete_flow_id is None:
             soft_delete(pid_value)
             return jsonify(
@@ -1219,10 +1574,10 @@ def prepare_delete_item(id=None, community=None):
 
         if rtn.action_id == 2:   # end_action
             soft_delete(pid_value)
-            
+
         if url_redirect.startswith("/api/"):
             url_redirect = url_redirect[4:]
-            
+
         return jsonify(
             code=0,
             msg='success',
@@ -1491,9 +1846,11 @@ def get_authors_affiliation_settings():
     if author_affiliation_settings is not None:
         results = []
         for affiliation in author_affiliation_settings:
+            name = affiliation.name
             scheme = affiliation.scheme
             url = affiliation.url
             result = dict(
+                name=name,
                 scheme=scheme,
                 url=url
             )

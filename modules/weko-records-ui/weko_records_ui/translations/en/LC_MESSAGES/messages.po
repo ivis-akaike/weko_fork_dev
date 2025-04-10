@@ -1401,6 +1401,24 @@ msgstr ""
 msgid "There is an error in the input item"
 msgstr ""
 
+msgid "Replacing file failed."
+msgstr ""
+
+msgid "S3 setting none. Please check your profile."
+msgstr ""
+
+msgid "This file is not from institutional storage."
+msgstr ""
+
+msgid "Getitng Bucket List failed."
+msgstr ""
+
+msgid "Creating Bucket failed."
+msgstr ""
+
+msgid "Getting region failed."
+msgstr ""
+
 msgid "S3 setting none. Please check your profile."
 msgstr ""
 

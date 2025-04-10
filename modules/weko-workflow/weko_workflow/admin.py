@@ -23,13 +23,16 @@
 import sys
 import re
 import uuid
+import json
 
+from flask_wtf import FlaskForm
 from flask import abort, current_app, flash, jsonify, request, url_for
 from flask_admin import BaseView, expose
 from flask_login import current_user
 from flask_babelex import gettext as _
 from flask_wtf import FlaskForm
 from invenio_accounts.models import Role, User
+from invenio_communities.models import Community
 from invenio_db import db
 from invenio_files_rest.models import Location
 from invenio_i18n.ext import current_i18n
@@ -37,6 +40,7 @@ from weko_admin.models import AdminSettings
 from weko_index_tree.models import Index
 from weko_records.api import ItemTypes
 from weko_records.models import ItemTypeProperty
+from weko_admin.models import AdminSettings
 
 from . import config
 from .api import Action, Flow, WorkActivity, WorkFlow
@@ -68,6 +72,11 @@ class FlowSettingView(BaseView):
         """
         users = User.query.filter_by(active=True).all()
         roles = Role.query.all()
+        if set(role.name for role in current_user.roles) & \
+                set(current_app.config['WEKO_PERMISSION_SUPER_ROLE_USER']):
+            repositories = [{"id": "Root Index"}] + Community.query.all()
+        else:
+            repositories = Community.get_repositories_by_user(current_user)
         actions = self.get_actions()
         if '0' == flow_id:
             flow = None
@@ -79,7 +88,8 @@ class FlowSettingView(BaseView):
                 users=users,
                 roles=roles,
                 actions=None,
-                action_list=actions
+                action_list=actions,
+                repositories=repositories
             )
         UUID_PATTERN = re.compile(r'^[\da-f]{8}-([\da-f]{4}-){3}[\da-f]{12}$',
                                   re.IGNORECASE)
@@ -101,7 +111,8 @@ class FlowSettingView(BaseView):
             roles=roles,
             actions=flow.flow_actions,
             action_list=actions,
-            specifed_properties=specified_properties
+            specifed_properties=specified_properties,
+            repositories=repositories
         )
 
     @staticmethod
@@ -291,7 +302,7 @@ class WorkFlowSettingView(BaseView):
         :return:
         """
         workflow = WorkFlow()
-        workflows = workflow.get_workflow_list()
+        workflows = workflow.get_workflow_list(user=current_user)
         role = Role.query.all()
         for wf in workflows:
             index_tree = Index().get_index_by_id(wf.index_tree_id)
@@ -335,6 +346,11 @@ class WorkFlowSettingView(BaseView):
         display_label = self.get_language_workflows("display")
         hide_label = self.get_language_workflows("hide")
         display_hide = self.get_language_workflows("display_hide")
+        if set(role.name for role in current_user.roles) & \
+                set(current_app.config['WEKO_PERMISSION_SUPER_ROLE_USER']):
+            repositories = [{"id": "Root Index"}] + Community.query.all()
+        else:
+            repositories = Community.get_repositories_by_user(current_user)
 
         # the workflow that open_restricted is true can update by system administrator only
         is_sysadmin = False
@@ -358,6 +374,7 @@ class WorkFlowSettingView(BaseView):
                 hide_label=hide_label,
                 display_hide_label=display_hide,
                 is_sysadmin=is_sysadmin,
+                repositories=repositories
             )
 
         """Update the workflow info"""
@@ -388,7 +405,9 @@ class WorkFlowSettingView(BaseView):
             display_label=display_label,
             hide_label=hide_label,
             display_hide_label=display_hide,
-            is_sysadmin=is_sysadmin
+            is_sysadmin=is_sysadmin,
+            repositories=repositories
+
         )
 
     @expose('/<string:workflow_id>', methods=['POST', 'PUT'])
@@ -410,7 +429,8 @@ class WorkFlowSettingView(BaseView):
             index_tree_id=json_data.get('index_id'),
             location_id=json_data.get('location_id'),
             open_restricted=json_data.get('open_restricted', False),
-            is_gakuninrdm=json_data.get('is_gakuninrdm')
+            is_gakuninrdm=json_data.get('is_gakuninrdm'),
+            repository_id=json_data.get('repository_id', None),
         )
         workflow = WorkFlow()
         try:
@@ -419,6 +439,8 @@ class WorkFlowSettingView(BaseView):
                 form_workflow.update(
                     flows_id=uuid.uuid4()
                 )
+                if form_workflow['repository_id'] == None:
+                    form_workflow.pop('repository_id')
                 workflow.create_workflow(form_workflow)
                 workflow_detail = workflow.get_workflow_by_flows_id(
                     form_workflow.get('flows_id'))
@@ -588,6 +610,60 @@ class ActivitySettingsView(BaseView):
             )
         return abort(400)
 
+class WorkSpaceWorkFlowSettingView(BaseView):
+    """WorkSpace WorkFlow setting view."""
+
+    @expose('/', methods=['GET', 'POST'])
+    def index(self):
+        """Index."""
+        default_workspace_workflowselect_api = { "item_type_id": "30002",
+                            "work_flow_id": "1", "workFlow_select_flg":"1"}  # Default
+
+        current_settings = AdminSettings.get(
+                name='workspace_workflow_settings',
+                dict_to_object=False)
+
+        if not current_settings:
+            AdminSettings.update('workspace_workflow_settings', default_workspace_workflowselect_api)
+            current_settings = AdminSettings.get(
+                name='workspace_workflow_settings',
+                dict_to_object=False)
+
+        try:
+            form = FlaskForm(request.form)
+            item_type_list = ItemTypes.get_latest_with_item_type(True)
+
+            item_type_list = [item for item in item_type_list if item[3] != True]
+            workflow = WorkFlow()
+            workflows = workflow.get_workflow_list()
+
+            if request.method == 'POST' and form.validate():
+                # Process forms
+                form = request.form.get('submit', None)
+                if form == 'set_workspace_workflow_setting_form':
+                    workFlow_select_flg = request.form.get('registrationRadio', '')
+
+                    # Direct registration
+                    if workFlow_select_flg == '1':
+                        current_settings["workFlow_select_flg"] = '1'
+                        current_settings["item_type_id"] = request.form.get('itemType', '')
+                    else:
+                        # Registration with workflow
+                        current_settings["workFlow_select_flg"] = '0'
+                        current_settings["work_flow_id"] = request.form.get('workFlow', '')
+
+                    AdminSettings.update('workspace_workflow_settings',
+                                         current_settings)
+                    flash(_('WorkSpace WorkFlow Setting was updated.'), category='success')
+
+            return self.render('weko_workflow/admin/workspace_workflow_setting.html',
+                               item_type_list=item_type_list,
+                               work_flow_list=workflows,
+                               form=form)
+        except BaseException:
+            current_app.logger.error(
+                'Unexpected error: {}'.format(sys.exc_info()))
+        return abort(400)
 
 workflow_adminview = {
     'view_class': WorkFlowSettingView,
@@ -595,6 +671,15 @@ workflow_adminview = {
         'category': _('WorkFlow'),
         'name': _('WorkFlow List'),
         'endpoint': 'workflowsetting'
+    }
+}
+
+workspace_workflow_adminview = {
+    'view_class': WorkSpaceWorkFlowSettingView,
+    'kwargs': {
+        'category': _('WorkFlow'),
+        'name': _('WorkSpaceWorkFlow Setting'),
+        'endpoint': 'workspaceworkflowsetting'
     }
 }
 
@@ -620,4 +705,5 @@ __all__ = (
     'flow_adminview',
     'workflow_adminview',
     'activity_settings_adminview',
+    'workspace_workflow_adminview',
 )
